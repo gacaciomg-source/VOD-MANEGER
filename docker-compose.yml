@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vodm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vodm}
+      POSTGRES_DB: vodm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vodm -d vodm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      VODM_DATABASE_URL: postgres://vodm:${POSTGRES_PASSWORD:-vodm}@postgres:5432/vodm?sslmode=disable
+      VODM_ENCRYPTION_KEY: ${VODM_ENCRYPTION_KEY:?defina VODM_ENCRYPTION_KEY - gere com: docker compose run --rm app genkey}
+      VODM_ROLE: ${VODM_ROLE:-all}
+      VODM_NODE_ID: ${VODM_NODE_ID:-node-1}
+      VODM_HTTP_ADDR: ":8080"
+      VODM_LOG_LEVEL: ${VODM_LOG_LEVEL:-info}
+      VODM_BOOTSTRAP_ADMIN_USERNAME: ${VODM_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      VODM_BOOTSTRAP_ADMIN_PASSWORD: ${VODM_BOOTSTRAP_ADMIN_PASSWORD:-}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

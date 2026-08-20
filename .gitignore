@@ -1,0 +1,10 @@
+bin/
+.env
+*.exe
+.embedded-postgres-go/
+node_modules/
+web/dist/
+
+# ambiente de desenvolvimento (vodm-dev): postgres embutido e chave local
+.vodm-dev/
+cookies.txt

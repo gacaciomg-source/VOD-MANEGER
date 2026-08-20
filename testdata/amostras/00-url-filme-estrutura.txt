@@ -1,0 +1,5 @@
+# Amostra: estrutura de URL de stream (Xtream) — filme
+# Anonimizada pelo administrador em 2026-08-18.
+# Confirma o padrao: dominio, depois /movie/, depois usuario, senha, id.extensao
+
+http://fonte-a.exemplo.tld/movie/usuario/senha/925522.mp4

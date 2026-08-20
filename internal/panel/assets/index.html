@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOD Manager</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div id="tela-login" class="login-wrap hidden">
+  <form class="login-card" id="form-login">
+    <div class="login-logo">🎬</div>
+    <h1>VOD Manager</h1>
+    <p class="login-sub">Entre para gerenciar suas fontes e catálogo</p>
+    <label>Usuário
+      <input type="text" id="login-usuario" autocomplete="username" required autofocus>
+    </label>
+    <label>Senha
+      <input type="password" id="login-senha" autocomplete="current-password" required>
+    </label>
+    <div class="erro" id="login-erro" hidden></div>
+    <button type="submit" class="btn btn-primario btn-largo" id="login-botao">Entrar</button>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <aside class="lateral">
+    <div class="marca"><span class="marca-icone">🎬</span> VOD Manager</div>
+    <nav id="menu">
+      <a href="#/painel"        data-rota="painel">Painel</a>
+      <a href="#/fontes"        data-rota="fontes">Fontes</a>
+      <a href="#/filmes"        data-rota="filmes">Filmes</a>
+      <a href="#/series"        data-rota="series">Séries</a>
+      <a href="#/categorias"    data-rota="categorias">Categorias</a>
+      <a href="#/naoresolvidos" data-rota="naoresolvidos">Não resolvidos <span class="selo" id="selo-naoresolvidos" hidden>0</span></a>
+      <a href="#/credenciais"   data-rota="credenciais">Credenciais</a>
+      <a href="#/streams"       data-rota="streams">Reproduções</a>
+      <a href="#/sincronizacoes" data-rota="sincronizacoes">Sincronizações</a>
+      <a href="#/eventos"       data-rota="eventos">Eventos</a>
+      <a href="#/falhas"        data-rota="falhas">Falhas</a>
+      <a href="#/usuarios"      data-rota="usuarios">Usuários</a>
+      <a href="#/sistema"       data-rota="sistema">Sistema</a>
+      <a href="#/configuracoes" data-rota="configuracoes">Configurações</a>
+    </nav>
+    <div class="rodape-lateral">
+      <div class="usuario" id="rodape-usuario"></div>
+      <button class="btn btn-sutil btn-largo" id="botao-sair">Sair</button>
+    </div>
+  </aside>
+
+  <main class="conteudo">
+    <header class="topo">
+      <button class="btn btn-sutil so-mobile" id="botao-menu" aria-label="Menu">☰</button>
+      <h1 id="titulo-pagina">Painel</h1>
+      <div class="topo-acoes" id="acoes-pagina"></div>
+    </header>
+    <div id="visao" class="visao"></div>
+  </main>
+</div>
+
+<div id="barra-sync" class="barra-sync hidden">
+  <div class="barra-sync-progresso"><div class="barra-sync-fill"></div></div>
+  <div class="barra-sync-corpo">
+    <span class="barra-sync-pulso"></span>
+    <span id="barra-sync-texto"></span>
+    <button class="btn btn-mini" id="barra-sync-detalhes">Detalhes</button>
+  </div>
+</div>
+
+<div id="avisos" class="avisos"></div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-caixa" role="dialog" aria-modal="true">
+    <header class="modal-topo">
+      <h2 id="modal-titulo"></h2>
+      <button class="btn btn-sutil" id="modal-fechar" aria-label="Fechar">✕</button>
+    </header>
+    <div id="modal-corpo" class="modal-corpo"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

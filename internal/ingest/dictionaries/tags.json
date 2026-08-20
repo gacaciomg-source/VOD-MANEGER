@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Dicionário de tags removidas do título durante a normalização.",
+    "É DADO, não código: pode ser ajustado às convenções das suas fontes sem recompilar,",
+    "apontando VODM_TAG_DICTIONARY para um arquivo com este mesmo formato.",
+    "As tags removidas NÃO são descartadas — vão para MatchSignals (docs/07 §4.6).",
+    "Comparação feita sobre o título já minúsculo e sem acentos."
+  ],
+  "quality": [
+    "2160p", "1080p", "1080i", "720p", "576p", "480p", "360p",
+    "4k", "uhd", "fhd", "hd", "sd", "hq",
+    "hdr", "hdr10", "dolby vision", "dv", "10bit", "8bit",
+    "web-dl", "webdl", "webrip", "web", "bluray", "blu-ray", "bdrip", "brrip",
+    "dvdrip", "hdrip", "hdtv", "remux", "cam", "ts", "tc",
+    "x264", "x265", "h264", "h265", "hevc", "avc", "xvid",
+    "aac", "ac3", "dts", "dd5.1", "5.1", "7.1", "atmos"
+  ],
+  "language": [
+    "dub", "dubl", "dublado", "dublada", "dublagem",
+    "l", "leg", "legendado", "legendada", "legenda",
+    "dual", "dual audio", "dual-audio",
+    "nacional", "nac", "original",
+    "pt", "pt-br", "ptbr", "por", "eng", "en", "es", "lat", "latino",
+    "multi", "vose"
+  ],
+  "_comment_idioma": [
+    "IMPORTANTE: idioma DISTINGUE identidade de conteúdo — 'Filme' e 'Filme [L]' são",
+    "entradas separadas no catálogo, porque em listas brasileiras a versão dublada e a",
+    "legendada ficam em categorias diferentes e o espectador escolhe uma delas.",
+    "Qualidade (1080p, 4K) NÃO distingue: é a mesma obra, e o sistema deve poder escolher",
+    "a melhor fonte livremente.",
+    "O 'l' isolado é a convenção brasileira para legendado — vem de sufixos como '[L]'."
+  ]
+}

@@ -1,0 +1,18 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="12345" tvg-name="Interestelar (2014)" tvg-logo="http://fonte-a.exemplo.tld/img/12345.jpg" group-title="FILMES | FICÇÃO",Interestelar (2014)
+http://fonte-a.exemplo.tld/movie/usuario/senha/12345.mp4
+#EXTINF:-1 tvg-id="12346" tvg-name="A Origem 2010 1080p DUAL" tvg-logo="http://fonte-a.exemplo.tld/img/12346.jpg" group-title="FILMES | FICÇÃO",A Origem 2010 1080p DUAL
+http://fonte-a.exemplo.tld/movie/usuario/senha/12346.mkv
+#EXTINF:7200 tvg-id="12347" tvg-name="O Poderoso Chefão" group-title="FILMES | CLÁSSICOS",O Poderoso Chefão [1972] [4K] [LEG]
+http://fonte-a.exemplo.tld/movie/usuario/senha/12347.mp4
+#EXTINF:-1 tvg-id="12348" tvg-name="Rocky II" group-title="FILMES | AÇÃO",Rocky II
+http://fonte-a.exemplo.tld/movie/usuario/senha/12348.mp4
+#EXTINF:-1 tvg-id="12349" tvg-name="Coração Valente (1995) DUBLADO" group-title="FILMES | AÇÃO",Coração Valente (1995) DUBLADO
+http://fonte-a.exemplo.tld/movie/usuario/senha/12349.mp4
+#EXTGRP:FILMES | INFANTIL
+#EXTINF:-1 tvg-id="12350" tvg-name="Toy Story",Toy Story
+http://fonte-a.exemplo.tld/movie/usuario/senha/12350.mp4
+#EXTINF:-1 tvg-name="Filme Sem ID 2001.720p.WEB-DL",Filme Sem ID 2001.720p.WEB-DL
+http://fonte-b.exemplo.tld/vod/98765.mp4?token=abc123&expires=1700000000
+#EXTINF:-1 tvg-id="12352" tvg-name="Título, Com Vírgula (2020)" group-title="FILMES, DIVERSOS",Título, Com Vírgula (2020)
+http://fonte-a.exemplo.tld/movie/usuario/senha/12352.mp4

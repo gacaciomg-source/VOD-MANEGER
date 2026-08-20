@@ -1,0 +1,7 @@
+[
+  {"category_id": "10", "category_name": "FILMES | AÇÃO", "parent_id": 0},
+  {"category_id": "11", "category_name": "FILMES | FICÇÃO", "parent_id": 0},
+  {"category_id": 12, "category_name": "FILMES | CLÁSSICOS", "parent_id": "0"},
+  {"category_id": "13", "category_name": "FILMES | INFANTIL", "parent_id": 0},
+  {"category_name": "CATEGORIA SEM ID", "parent_id": 0}
+]

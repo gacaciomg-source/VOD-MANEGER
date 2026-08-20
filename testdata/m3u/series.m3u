@@ -1,0 +1,17 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="55001" tvg-name="Breaking Bad S01E01" group-title="SÉRIES | DRAMA",Breaking Bad S01E01 - Pilot
+http://fonte-a.exemplo.tld/series/usuario/senha/55001.mkv
+#EXTINF:-1 tvg-id="55002" tvg-name="Breaking Bad S01E02" group-title="SÉRIES | DRAMA",Breaking Bad S01E02 - Cat's in the Bag
+http://fonte-a.exemplo.tld/series/usuario/senha/55002.mkv
+#EXTINF:-1 tvg-id="55003" tvg-name="Breaking Bad 1x03" group-title="SÉRIES | DRAMA",Breaking Bad 1x03
+http://fonte-a.exemplo.tld/series/usuario/senha/55003.mkv
+#EXTINF:-1 tvg-id="55010" tvg-name="Cidade Invisível T01 EP01" group-title="SÉRIES | NACIONAL",Cidade Invisível T01 EP01
+http://fonte-a.exemplo.tld/series/usuario/senha/55010.mp4
+#EXTINF:-1 tvg-id="55011" tvg-name="Cidade Invisível Temporada 1 Episódio 2" group-title="SÉRIES | NACIONAL",Cidade Invisível Temporada 1 Episódio 2
+http://fonte-a.exemplo.tld/series/usuario/senha/55011.mp4
+#EXTINF:-1 tvg-id="55012" tvg-name="Cidade Invisível 2 Temporada Ep 5" group-title="SÉRIES | NACIONAL",Cidade Invisível 2 Temporada Ep 5
+http://fonte-a.exemplo.tld/series/usuario/senha/55012.mp4
+#EXTINF:-1 tvg-id="55020" tvg-name="Dark Season 2 Episode 4 1080p LEG" group-title="SÉRIES | FICÇÃO",Dark Season 2 Episode 4 1080p LEG
+http://fonte-a.exemplo.tld/series/usuario/senha/55020.mkv
+#EXTINF:-1 tvg-id="55030" tvg-name="Série Sem Numeração - Temporada Completa" group-title="SÉRIES | DIVERSOS",Série Sem Numeração - Temporada Completa
+http://fonte-a.exemplo.tld/series/usuario/senha/55030.mp4

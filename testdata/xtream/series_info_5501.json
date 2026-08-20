@@ -1,0 +1,72 @@
+{
+  "seasons": [
+    {"air_date": "2008-01-20", "episode_count": "2", "id": 3572, "name": "Season 1", "season_number": 1},
+    {"air_date": "2009-03-08", "episode_count": 1, "id": 3573, "name": "Season 2", "season_number": "2"}
+  ],
+  "info": {
+    "name": "Breaking Bad",
+    "cover": "http://fonte-a.exemplo.tld/img/serie5501.jpg",
+    "plot": "Um professor de química vira fabricante de metanfetamina.",
+    "releaseDate": "2008-01-20",
+    "rating": "9.5",
+    "episode_run_time": "47",
+    "category_id": "20"
+  },
+  "episodes": {
+    "2": [
+      {
+        "id": "55021",
+        "episode_num": 1,
+        "title": "Seven Thirty-Seven",
+        "container_extension": "mkv",
+        "season": 2,
+        "info": {
+          "plot": "Walt e Jesse enfrentam as consequências.",
+          "duration_secs": 2820,
+          "duration": "00:47:00",
+          "movie_image": "http://fonte-a.exemplo.tld/img/ep55021.jpg",
+          "rating": "8.5",
+          "releaseDate": "2009-03-08"
+        }
+      }
+    ],
+    "1": [
+      {
+        "id": 55001,
+        "episode_num": "1",
+        "title": "Pilot",
+        "container_extension": "mkv",
+        "season": 1,
+        "custom_sid": "",
+        "direct_source": "http://fonte-a.exemplo.tld/series/usuario/senha/55001.mkv",
+        "info": {
+          "plot": "Um professor de química recebe um diagnóstico.",
+          "duration_secs": 3480,
+          "duration": "00:58:00",
+          "movie_image": "http://fonte-a.exemplo.tld/img/ep55001.jpg",
+          "rating": 9.0,
+          "tmdb_id": "62085",
+          "releaseDate": "2008-01-20"
+        }
+      },
+      {
+        "id": "55002",
+        "episode_num": 2,
+        "title": "",
+        "container_extension": "mkv",
+        "season": "1",
+        "info": {
+          "duration": "00:48:00",
+          "rating": ""
+        }
+      },
+      {
+        "episode_num": 3,
+        "title": "Episódio Sem ID",
+        "container_extension": "mkv",
+        "season": 1,
+        "info": {}
+      }
+    ]
+  }
+}

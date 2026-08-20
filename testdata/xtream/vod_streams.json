@@ -1,0 +1,55 @@
+[
+  {
+    "num": 1,
+    "name": "Interestelar (2014)",
+    "stream_type": "movie",
+    "stream_id": 12345,
+    "stream_icon": "http://fonte-a.exemplo.tld/img/12345.jpg",
+    "rating": "8.6",
+    "rating_5based": 4.3,
+    "added": "1609459200",
+    "category_id": "11",
+    "container_extension": "mp4",
+    "custom_sid": "",
+    "direct_source": "",
+    "tmdb_id": "157336",
+    "releaseDate": "2014-11-07",
+    "plot": "Um grupo de exploradores viaja através de um buraco de minhoca.",
+    "episode_run_time": 169
+  },
+  {
+    "num": 2,
+    "name": "A Origem 1080p DUAL",
+    "stream_type": "movie",
+    "stream_id": "12346",
+    "stream_icon": "http://fonte-a.exemplo.tld/img/12346.jpg",
+    "rating": 8.8,
+    "category_id": "11",
+    "container_extension": "mkv",
+    "year": "2010",
+    "tmdb": "27205"
+  },
+  {
+    "num": 3,
+    "name": "O Poderoso Chefão",
+    "stream_type": "movie",
+    "stream_id": "12347",
+    "rating": "",
+    "category_id": 12,
+    "container_extension": "mp4",
+    "releaseDate": "1972-03-24"
+  },
+  {
+    "num": 4,
+    "name": "Filme Sem Categoria",
+    "stream_type": "movie",
+    "stream_id": "12348",
+    "container_extension": "mp4"
+  },
+  {
+    "num": 5,
+    "name": "Item Sem Stream ID",
+    "stream_type": "movie",
+    "container_extension": "mp4"
+  }
+]

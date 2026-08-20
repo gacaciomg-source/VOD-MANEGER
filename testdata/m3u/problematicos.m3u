@@ -1,0 +1,19 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="90001" tvg-name="Canal Ao Vivo HD" group-title="CANAIS",Canal Ao Vivo HD
+http://fonte-a.exemplo.tld/live/usuario/senha/90001.m3u8
+#EXTINF:-1 tvg-id="90002" tvg-name="" group-title="FILMES",
+http://fonte-a.exemplo.tld/movie/usuario/senha/90002.mp4
+#EXTINF:-1 tvg-id="90003" tvg-name="Filme Sem URL" group-title="FILMES",Filme Sem URL
+#EXTINF:-1 tvg-id="90004" tvg-name="Filme Depois do Sem URL" group-title="FILMES",Filme Depois do Sem URL
+http://fonte-a.exemplo.tld/movie/usuario/senha/90004.mp4
+http://fonte-a.exemplo.tld/movie/usuario/senha/90005.mp4
+#EXTVLCOPT:network-caching=1000
+#KODIPROP:inputstream=inputstream.adaptive
+#EXTINF:-1 tvg-id="90006" tvg-name="Filme Com URL Relativa" group-title="FILMES",Filme Com URL Relativa
+/caminho/relativo/90006.mp4
+#EXTINF:-1 tvg-id="90007" tvg-name="Filme Sem Extensão" group-title="FILMES",Filme Sem Extensão
+http://fonte-b.exemplo.tld/stream/90007
+#EXTINF:-1 tvg-id="90008" tvg-name="Filme Sem Aspas" group-title=FILMES,Filme Sem Aspas
+http://fonte-a.exemplo.tld/movie/usuario/senha/90008.mp4
+#EXTINF:-1 tvg-id="90009" tvg-name="Aspas Não Fechadas group-title="FILMES",Aspas Não Fechadas
+http://fonte-a.exemplo.tld/movie/usuario/senha/90009.mp4

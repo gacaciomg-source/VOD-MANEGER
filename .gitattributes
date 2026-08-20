@@ -1,0 +1,31 @@
+# Quebras de linha.
+#
+# Sem isto, o Git no Windows converte os arquivos para CRLF ao gravá-los — e um script
+# .sh com CRLF é recusado pelo bash do Linux com um erro que não ajuda em nada
+# ($'\r': command not found). O mesmo vale para os arquivos SQL das migrações.
+#
+# Marcamos como LF tudo que é executado ou lido por Linux.
+*.sh   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+
+# Go já é padronizado pelo gofmt; deixar explícito evita diferenças espúrias.
+*.go text eol=lf
+
+# Arquivos servidos pelo painel e dados de teste.
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.m3u  text eol=lf
+
+# Scripts do PowerShell.
+#
+# O Windows PowerShell 5.1 lê arquivo sem BOM como ANSI: os acentos viram bytes soltos e o
+# parser quebra com erros que não têm relação com a causa ("string sem terminador"). O BOM
+# é parte do conteúdo e o Git o preserva; o que precisamos garantir aqui é a quebra de
+# linha do Windows, para o arquivo continuar previsível na máquina onde ele roda.
+*.ps1 text eol=crlf
