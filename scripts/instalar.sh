@@ -248,10 +248,35 @@ PathExists=/opt/vodmanager/solicitar-atualizacao
 WantedBy=multi-user.target
 UNIT
 
+# Configuração de domínio pelo painel, pelo mesmo mecanismo da atualização: o painel só
+# escreve um pedido, e o systemd — que é root — executa. O serviço nunca ganha privilégio.
+cat > /etc/systemd/system/vodmanager-domain.service <<UNIT
+[Unit]
+Description=Configuração de domínio do VOD Manager (disparada pelo painel)
+
+[Service]
+Type=oneshot
+# O pedido carrega o domínio e o e-mail, e é consumido ANTES de começar: se o script
+# falhar, o arquivo já não existe e a tarefa não fica repetindo em laço.
+ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/solicitar-dominio; rm -f /opt/vodmanager/solicitar-dominio; ${FONTE}/scripts/dominio.sh "$d" "$e"'
+UNIT
+
+cat > /etc/systemd/system/vodmanager-domain.path <<UNIT
+[Unit]
+Description=Observa o pedido de domínio vindo do painel
+
+[Path]
+PathExists=/opt/vodmanager/solicitar-dominio
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 rm -f /etc/sudoers.d/vodmanager   # de versões anteriores deste instalador
 systemctl daemon-reload
 systemctl enable --now --quiet vodmanager-update.path
-verde "    botão Atualizar liberado no painel"
+systemctl enable --now --quiet vodmanager-domain.path
+verde "    botões Atualizar e Domínio liberados no painel"
 
 # ---------------------------------------------------------------------------
 passo "8/9  Firewall"

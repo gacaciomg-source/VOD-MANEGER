@@ -243,6 +243,7 @@ const rotas = {
   naoresolvidos:  { titulo: 'Não resolvidos',  render: verNaoResolvidos },
   credenciais:    { titulo: 'Credenciais',     render: verCredenciais },
   streams:        { titulo: 'Reproduções',     render: verStreams },
+  duplicatas:     { titulo: 'Duplicatas',      render: verDuplicatas },
   falhas:         { titulo: 'Falhas',          render: verFalhas },
   usuarios:       { titulo: 'Usuários',        render: verUsuarios },
   sistema:        { titulo: 'Sistema',         render: verSistema },
@@ -1734,6 +1735,113 @@ async function mostrarLinksDaLista(c) {
 }
 
 // ---------------------------------------------------------------------------
+// Tela: Duplicatas sugeridas
+// ---------------------------------------------------------------------------
+
+async function verDuplicatas() {
+  const d = await api('/duplicatas');
+
+  const cartao = (c, outro, i, lado) => `
+    <div class="lado-duplicata">
+      ${c.poster_url
+        ? `<img class="cartaz" src="${esc(c.poster_url)}" alt="" loading="lazy"
+             onerror="this.style.display='none'">`
+        : '<div class="sem-cartaz">🎬</div>'}
+      <div style="flex:1;min-width:0">
+        <b>${esc(c.titulo)}</b>
+        ${c.tem_marcacao ? '<span class="etiqueta alerta">marcação</span>' : ''}
+        <div class="dica">
+          ${c.ano ?? 'sem ano'} ·
+          ${num(c.variantes)} fonte${c.variantes === 1 ? '' : 's'} ·
+          <span class="mono">id ${c.id}</span>
+        </div>
+        <button class="btn btn-mini btn-primario" data-unir="${i}" data-manter="${c.id}">
+          Manter este
+        </button>
+      </div>
+    </div>`;
+
+  $('#visao').innerHTML = `
+    <p class="discreto" style="margin:0 0 14px">
+      Pares que <b>parecem</b> ser o mesmo conteúdo: mesmo tipo, mesmo ano e mesmo título
+      depois de ignorar a palavra <b>"Lançamento"</b>. O sistema aponta;
+      <b>quem decide é você</b>.
+      <br><br>
+      Nada é agrupado sozinho. Uma regra que remove "Lançamento" acerta quase sempre e
+      erraria em silêncio no dia em que aparecesse um filme com esse nome de verdade.
+    </p>
+
+    ${d.limitado ? `
+      <div class="veredito alerta">
+        Mostrando os primeiros ${num(d.total)} pares. Resolva estes e a lista traz os
+        próximos.
+      </div>` : ''}
+
+    ${d.sugestoes.length ? d.sugestoes.map((s, i) => `
+      <div class="cartao par-duplicata" data-par="${i}">
+        <div class="duplicata-lados">
+          ${cartao(s.a, s.b, i, 'a')}
+          <div class="duplicata-versus">ou</div>
+          ${cartao(s.b, s.a, i, 'b')}
+        </div>
+        <div class="grupo-botoes" style="justify-content:flex-start;margin-top:10px">
+          <button class="btn btn-mini" data-diferentes="${i}">São conteúdos diferentes</button>
+        </div>
+      </div>`).join('')
+      : `<div class="cartao"><div class="vazio">
+          <span class="icone">✅</span>
+          <h3>Nenhuma duplicata sugerida</h3>
+          <p>Não há pares parecidos esperando decisão.</p>
+        </div></div>`}
+  `;
+
+  const decidir = async (i, manter, botao) => {
+    const s = d.sugestoes[i];
+    botao.disabled = true;
+    try {
+      const r = await api('/duplicatas/decidir', {
+        method: 'POST',
+        corpo: { a: s.a.id, b: s.b.id, manter },
+      });
+      if (r.unidos) {
+        aviso(`Unidos. ${num(r.variantes_movidas)} fonte(s) movida(s). ` +
+              'Quem já importou o item removido precisa reimportar.', 'ok');
+      } else {
+        aviso('Marcados como conteúdos diferentes.', 'ok');
+      }
+      const linha = $(`[data-par="${i}"]`);
+      if (linha) linha.remove();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      botao.disabled = false;
+    }
+  };
+
+  $$('[data-unir]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const i = Number(b.dataset.unir);
+      const s = d.sugestoes[i];
+      const manter = Number(b.dataset.manter);
+      const remover = manter === s.a.id ? s.b : s.a;
+
+      const ok = await confirmar('Unir conteúdos',
+        `As fontes de "${remover.titulo}" passam para "${manter === s.a.id ? s.a.titulo : s.b.titulo}", ` +
+        `e o item removido deixa de existir. ` +
+        `Quem já importou o id ${remover.id} vai precisar reimportar para vê-lo de novo.`,
+        'Unir');
+      if (!ok) return;
+      await decidir(i, manter, b);
+    });
+  });
+
+  $$('[data-diferentes]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      await decidir(Number(b.dataset.diferentes), 0, b);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tela: Falhas de reprodução
 // ---------------------------------------------------------------------------
 
@@ -2003,6 +2111,11 @@ async function verSistema() {
     </div>
 
     <div class="cartao">
+      <h2>Domínio e HTTPS</h2>
+      <div id="area-dominio"><span class="discreto">Verificando…</span></div>
+    </div>
+
+    <div class="cartao">
       <h2>Dados entregues</h2>
       <div id="area-trafego"><span class="discreto">Carregando…</span></div>
     </div>
@@ -2035,6 +2148,7 @@ async function verSistema() {
     </div>
   `;
 
+  await desenharDominio();
   await desenharTrafego();
   await desenharAtualizacao();
 
@@ -2043,6 +2157,102 @@ async function verSistema() {
   temporizadorSistema = setTimeout(() => {
     if (estado.rota === 'sistema' && !estado.ocupado) navegar();
   }, 5000);
+}
+
+// desenharDominio monta a seção de domínio e HTTPS.
+async function desenharDominio() {
+  const area = $('#area-dominio');
+  if (!area) return;
+
+  let d;
+  try {
+    d = await api('/system/dominio');
+  } catch (err) {
+    area.innerHTML = `<div class="erro">${esc(err.message)}</div>`;
+    return;
+  }
+
+  const registro = d.registro
+    ? `<div class="secao-titulo" style="margin:14px 0 6px">Última configuração</div>
+       <textarea class="mono" rows="10" readonly style="font-size:12px">${esc(d.registro)}</textarea>`
+    : '';
+
+  if (d.em_andamento) {
+    area.innerHTML = `
+      <div class="veredito alerta">
+        <b>Configuração em andamento.</b>
+        Leva um ou dois minutos. O acesso pelo IP continua funcionando o tempo todo.
+      </div>
+      ${registro}`;
+    setTimeout(() => { if (estado.rota === 'sistema') desenharDominio(); }, 5000);
+    return;
+  }
+
+  area.innerHTML = `
+    <p class="discreto" style="margin:-8px 0 12px">
+      Aponte um domínio para esta máquina e o sistema instala o nginx, emite o certificado
+      e liga o HTTPS. <b>O acesso pelo IP continua funcionando</b> — os links que os seus
+      clientes já têm apontam para ele, e derrubá-los de uma vez seria o pior jeito de
+      migrar.
+    </p>
+    ${d.disponivel ? `
+      <label>Domínio
+        <input id="dom-nome" placeholder="vod.seudominio.com" autocomplete="off">
+      </label>
+      <label>E-mail (opcional)
+        <input id="dom-email" placeholder="voce@email.com" autocomplete="off">
+      </label>
+      <p class="dica">
+        Antes de continuar, crie um registro <b>A</b> apontando o domínio para o IP desta
+        máquina. O sistema confere isso primeiro e avisa se ainda não propagou — sem isso
+        o certificado não é emitido.
+        <br>
+        O e-mail recebe o aviso quando a renovação automática do certificado falhar. Sem
+        ele, ninguém é avisado.
+      </p>
+      <div class="erro" id="dom-erro" hidden></div>
+      <div class="grupo-botoes" style="justify-content:flex-start">
+        <button class="btn btn-primario" id="dom-aplicar">Configurar domínio</button>
+      </div>`
+    : `<div class="erro">${esc(d.motivo)}</div>`}
+    ${registro}`;
+
+  const botao = $('#dom-aplicar');
+  if (!botao) return;
+
+  botao.onclick = () => comAcao(async () => {
+    const erro = $('#dom-erro');
+    erro.hidden = true;
+    const dominio = $('#dom-nome').value.trim();
+    if (!dominio) {
+      erro.textContent = 'Informe o domínio.';
+      erro.hidden = false;
+      return;
+    }
+
+    const ok = await confirmar('Configurar domínio',
+      `O nginx será instalado e configurado para ${dominio}, e o certificado emitido. ` +
+      'Se algo falhar, a configuração anterior é restaurada sozinha. ' +
+      'O acesso pelo IP não é alterado.',
+      'Configurar');
+    if (!ok) return;
+
+    botao.disabled = true;
+    botao.textContent = 'Configurando…';
+    try {
+      const r = await api('/system/dominio', {
+        method: 'POST',
+        corpo: { dominio, email: $('#dom-email').value.trim() },
+      });
+      aviso(r.aviso, 'ok');
+      desenharDominio();
+    } catch (err) {
+      erro.textContent = err.message;
+      erro.hidden = false;
+      botao.disabled = false;
+      botao.textContent = 'Configurar domínio';
+    }
+  });
 }
 
 // desenharTrafego monta o resumo de dados entregues.

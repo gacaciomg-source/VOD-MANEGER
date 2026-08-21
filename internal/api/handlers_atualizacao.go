@@ -104,7 +104,12 @@ func emAndamento() bool {
 	if _, err := os.Stat(pedidoAtualizacao); err == nil {
 		return true
 	}
-	saida, _ := exec.Command("systemctl", "is-active", unidadeAtualizacao).Output()
+	return unidadeEmExecucao(unidadeAtualizacao)
+}
+
+// unidadeEmExecucao informa se uma unidade oneshot está rodando agora.
+func unidadeEmExecucao(unidade string) bool {
+	saida, _ := exec.Command("systemctl", "is-active", unidade).Output()
 	estado := strings.TrimSpace(string(saida))
 	return estado == "active" || estado == "activating"
 }

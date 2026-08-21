@@ -128,6 +128,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/categories", s.handleListCategories)
 			r.Get("/source-categories", s.handleListSourceCategories)
 			r.Get("/categorias/pendencias", s.handleListPendencias)
+			r.Get("/duplicatas", s.handleListDuplicatas)
 			r.Get("/unresolved", s.handleListUnresolved)
 			r.Get("/sync/runs", s.handleListSyncRuns)
 			r.Get("/sync/runs/{id}", s.handleGetSyncRun)
@@ -136,6 +137,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/settings", s.handleGetSettings)
 			r.Get("/system", s.handleSystem)
 			r.Get("/system/update", s.handleUpdateStatus)
+			r.Get("/system/dominio", s.handleDominioStatus)
 			r.Get("/falhas", s.handleFalhas)
 			r.Get("/trafego", s.handleTrafego)
 
@@ -165,6 +167,7 @@ func (s *Server) routes() chi.Router {
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole(s.deny, store.RoleAdmin))
 					r.Post("/system/update", s.handleUpdateStart)
+					r.Post("/system/dominio", s.handleConfigurarDominio)
 					r.Get("/users", s.handleListUsers)
 					r.Post("/users", s.handleCreateUser)
 					r.Patch("/users/{id}", s.handleUpdateUser)
@@ -181,6 +184,9 @@ func (s *Server) routes() chi.Router {
 				r.Patch("/categories/{id}", s.handleRenameCategory)
 				r.Put("/categories/{id}/principal", s.handleMarcarPrincipal)
 				r.Post("/categorias/pendencias/{id}/resolver", s.handleResolverPendencia)
+				// Unir conteúdos apaga um identificador que clientes podem ter importado: exige
+				// papel de escrita e fica registrado em evento.
+				r.Post("/duplicatas/decidir", s.handleDecidirDuplicata)
 				// Expõe a URL de origem: exige escrita e é registrado em evento.
 				r.Get("/variants/{vid}/origin-url", s.handleVariantOriginURL)
 			})

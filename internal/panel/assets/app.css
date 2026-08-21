@@ -300,3 +300,11 @@ body.com-barra-sync .visao { padding-bottom: 90px; }
 /* Caixa de seleção alinhada com o rótulo, em formulários. */
 .linha-check { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .linha-check input { width: auto; margin: 0; }
+
+/* Comparação lado a lado de conteúdos possivelmente duplicados. */
+.duplicata-lados { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; }
+.lado-duplicata { display: flex; gap: 10px; flex: 1 1 280px; min-width: 260px;
+                  padding: 10px; border: 1px solid var(--borda); border-radius: 8px; }
+.lado-duplicata .cartaz { width: 48px; height: 72px; object-fit: cover; border-radius: 4px; }
+.duplicata-versus { align-self: center; color: var(--texto-3); font-size: 12px; }
+.par-duplicata { margin-top: 12px; }

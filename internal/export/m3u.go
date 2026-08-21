@@ -75,10 +75,9 @@ func (e *EscritorM3U) Filme(m store.ExportMovie) error {
 // O nome carrega série, temporada e episódio porque a lista M3U é plana: o cliente não
 // tem estrutura de pastas, só o texto de cada linha para se orientar.
 func (e *EscritorM3U) Episodio(ep store.ExportEpisode) error {
-	nome := fmt.Sprintf("%s%s S%02dE%02d", ep.SeriesTitle, marcaDeIdioma(ep.LanguageKey), ep.SeasonNumber, ep.Number)
-	if t := strings.TrimSpace(ep.Title); t != "" {
-		nome += " - " + t
-	}
+	// Mesma composição da API Xtream: os dois formatos precisam produzir o MESMO nome,
+	// senão o mesmo episódio aparece diferente conforme o app do cliente.
+	nome := nomeDeEpisodio(ep)
 	logo := ep.PosterURL
 	return e.entrada(entradaM3U{
 		id:        "episode." + strconv.FormatInt(ep.ID, 10),

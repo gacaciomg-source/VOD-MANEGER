@@ -1,6 +1,7 @@
 package export
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -208,11 +209,49 @@ func serieXtream(s store.ExportSeries, num int) SerieXtream {
 	}
 }
 
-func episodioXtream(e store.ExportEpisode) EpisodioXtream {
-	titulo := strings.TrimSpace(e.Title)
-	if titulo == "" {
-		titulo = "Episódio " + strconv.Itoa(e.Number)
+// nomeDeEpisodio monta o nome que o cliente vê.
+//
+// O padrão é sempre o mesmo, com ou sem título vindo da fonte:
+//
+//	Arquivo X (Legendado) S02E05 - O Retorno
+//	Arquivo X S02E05
+//
+// Antes, um episódio sem título virava só "Episódio 5" — e num painel que importa os
+// itens de forma plana, cinco séries diferentes viravam cinco "Episódio 5" indistinguíveis.
+// A série e a numeração vêm primeiro porque são o que identifica; o título é o extra.
+func nomeDeEpisodio(e store.ExportEpisode) string {
+	nome := fmt.Sprintf("%s%s S%02dE%02d",
+		e.SeriesTitle, marcaDeIdioma(e.LanguageKey), e.SeasonNumber, e.Number)
+	if t := strings.TrimSpace(e.Title); t != "" && !tituloRedundante(t, e.Number) {
+		nome += " - " + t
 	}
+	return nome
+}
+
+// tituloRedundante descarta títulos que só repetem a numeração.
+//
+// Fontes costumam preencher o título com "Episódio 5", "EP 5" ou "E05" quando não têm o
+// nome real. Repetir isso depois de "S02E05" não acrescenta nada e só deixa o nome longo.
+func tituloRedundante(titulo string, numero int) bool {
+	limpo := strings.ToLower(strings.TrimSpace(titulo))
+	limpo = strings.NewReplacer("º", "", "°", "", ".", "", "-", " ", ":", " ").Replace(limpo)
+	limpo = strings.Join(strings.Fields(limpo), " ")
+
+	n := strconv.Itoa(numero)
+	for _, forma := range []string{
+		"episodio " + n, "episódio " + n, "epis " + n,
+		"ep " + n, "ep" + n, "e" + n, n,
+		fmt.Sprintf("episodio %02d", numero), fmt.Sprintf("episódio %02d", numero),
+		fmt.Sprintf("ep %02d", numero), fmt.Sprintf("e%02d", numero),
+	} {
+		if limpo == forma {
+			return true
+		}
+	}
+	return false
+}
+
+func episodioXtream(e store.ExportEpisode) EpisodioXtream {
 	segundos := 0
 	if e.Duration != nil {
 		segundos = *e.Duration
@@ -220,7 +259,7 @@ func episodioXtream(e store.ExportEpisode) EpisodioXtream {
 	return EpisodioXtream{
 		ID:                 strconv.FormatInt(e.ID, 10),
 		EpisodeNum:         e.Number,
-		Title:              titulo,
+		Title:              nomeDeEpisodio(e),
 		ContainerExtension: extensaoOu(e.Extension),
 		Season:             e.SeasonNumber,
 		Added:              strconv.FormatInt(e.AddedAt, 10),

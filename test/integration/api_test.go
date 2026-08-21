@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -768,4 +769,146 @@ func newAPIClientFor(t *testing.T, base string) (*apiClient, error) {
 		return nil, err
 	}
 	return &apiClient{t: t, base: base, http: &http.Client{Jar: jar, Timeout: 10 * time.Second}}, nil
+}
+
+// A sugestão de duplicata aponta, mas quem decide é o administrador — e a decisão precisa
+// valer nos dois sentidos: unir de verdade, ou nunca mais perguntar.
+func TestDuplicatasSugeridasEDecisao(t *testing.T) {
+	c, env := newAPI(t)
+	c.loginOK()
+	ctx := context.Background()
+
+	// O mesmo filme, com e sem a marcação que a fonte anexa.
+	lista := "#EXTM3U\n" +
+		`#EXTINF:-1 tvg-name="Um Grande Despertar (2026)" group-title="Filmes",Um Grande Despertar (2026)` + "\n" +
+		"http://origem.exemplo.tld/movie/u/s/1.mp4\n" +
+		`#EXTINF:-1 tvg-name="Um Grande Despertar Lançamento (2026)" group-title="Filmes",Um Grande Despertar Lançamento (2026)` + "\n" +
+		"http://origem.exemplo.tld/movie/u/s/2.mp4\n"
+
+	fonte := novaFonteM3U(t, lista)
+	src := cadastrarFonte(t, env, "Fonte", store.SourceKindM3U, fonte.server.URL+"/lista.m3u", false)
+	orch := montarOrquestrador(t, env)
+	if _, err := orch.SyncSource(ctx, src.ID, "manual"); err != nil {
+		t.Fatalf("SyncSource: %v", err)
+	}
+
+	resp, body := c.do(http.MethodGet, "/api/v1/duplicatas", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /duplicatas = %d: %s", resp.StatusCode, body)
+	}
+	var lista1 struct {
+		Sugestoes []struct {
+			A struct {
+				ID          int64  `json:"id"`
+				Titulo      string `json:"titulo"`
+				TemMarcacao bool   `json:"tem_marcacao"`
+			} `json:"a"`
+			B struct {
+				ID          int64  `json:"id"`
+				Titulo      string `json:"titulo"`
+				TemMarcacao bool   `json:"tem_marcacao"`
+			} `json:"b"`
+		} `json:"sugestoes"`
+	}
+	if err := json.Unmarshal(body, &lista1); err != nil {
+		t.Fatalf("decodificando: %v", err)
+	}
+	if len(lista1.Sugestoes) != 1 {
+		t.Fatalf("sugestões = %d, esperava 1: %s", len(lista1.Sugestoes), body)
+	}
+	// O painel precisa poder mostrar QUAL dos dois carrega a marcação.
+	s := lista1.Sugestoes[0]
+	if s.A.TemMarcacao == s.B.TemMarcacao {
+		t.Errorf("um dos lados deveria ter marcação e o outro não: %+v", s)
+	}
+
+	// Decisão negativa: são diferentes. A sugestão não pode voltar.
+	if resp, body := c.do(http.MethodPost, "/api/v1/duplicatas/decidir",
+		map[string]any{"a": s.A.ID, "b": s.B.ID, "manter": 0}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("decidir = %d: %s", resp.StatusCode, body)
+	}
+	_, body = c.do(http.MethodGet, "/api/v1/duplicatas", nil)
+	var lista2 struct {
+		Sugestoes []any `json:"sugestoes"`
+	}
+	json.Unmarshal(body, &lista2)
+	if len(lista2.Sugestoes) != 0 {
+		t.Errorf("a sugestão recusada voltou a aparecer: %s", body)
+	}
+}
+
+// Unir move as fontes do removido para quem fica, e o id do removido deixa de existir.
+func TestUnirConteudosMoveAsFontes(t *testing.T) {
+	c, env := newAPI(t)
+	c.loginOK()
+	ctx := context.Background()
+
+	lista := "#EXTM3U\n" +
+		`#EXTINF:-1 tvg-name="Filme Unico (2024)" group-title="Filmes",Filme Unico (2024)` + "\n" +
+		"http://origem.exemplo.tld/movie/u/s/1.mp4\n" +
+		`#EXTINF:-1 tvg-name="Filme Unico Lançamento (2024)" group-title="Filmes",Filme Unico Lançamento (2024)` + "\n" +
+		"http://origem.exemplo.tld/movie/u/s/2.mp4\n"
+
+	fonte := novaFonteM3U(t, lista)
+	src := cadastrarFonte(t, env, "Fonte", store.SourceKindM3U, fonte.server.URL+"/lista.m3u", false)
+	orch := montarOrquestrador(t, env)
+	if _, err := orch.SyncSource(ctx, src.ID, "manual"); err != nil {
+		t.Fatalf("SyncSource: %v", err)
+	}
+
+	_, body := c.do(http.MethodGet, "/api/v1/duplicatas", nil)
+	var l struct {
+		Sugestoes []struct {
+			A struct{ ID int64 } `json:"a"`
+			B struct{ ID int64 } `json:"b"`
+		} `json:"sugestoes"`
+	}
+	if err := json.Unmarshal(body, &l); err != nil || len(l.Sugestoes) != 1 {
+		t.Fatalf("esperava 1 sugestão: %v %s", err, body)
+	}
+	manter, remover := l.Sugestoes[0].A.ID, l.Sugestoes[0].B.ID
+
+	resp, body := c.do(http.MethodPost, "/api/v1/duplicatas/decidir",
+		map[string]any{"a": manter, "b": remover, "manter": manter})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unindo = %d: %s", resp.StatusCode, body)
+	}
+
+	// O removido não existe mais.
+	var existe int
+	env.Pool.QueryRow(ctx, `SELECT count(*) FROM contents WHERE id = $1`, remover).Scan(&existe)
+	if existe != 0 {
+		t.Error("o conteúdo removido continuou no catálogo")
+	}
+	// E as duas fontes agora servem quem ficou.
+	var variantes int
+	env.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM source_variants WHERE target_kind='content' AND target_id = $1`,
+		manter).Scan(&variantes)
+	if variantes != 2 {
+		t.Errorf("variantes no conteúdo mantido = %d, esperava 2", variantes)
+	}
+}
+
+// A validação do domínio acontece no painel, antes de virar pedido: um domínio malformado
+// só seria descoberto no registro, minutos depois, quando o script recusasse.
+func TestValidacaoDoDominio(t *testing.T) {
+	c, _ := newAPI(t)
+	c.loginOK()
+
+	invalidos := []string{
+		"", "   ", "sem-ponto", "http://", "espaço no meio.com",
+		"-comeca-com-hifen.com", "termina-com-ponto.",
+		// Tentativa de emendar um argumento a mais no pedido.
+		"exemplo.com voce@email.com --algo",
+	}
+	for _, d := range invalidos {
+		resp, _ := c.do(http.MethodPost, "/api/v1/system/dominio",
+			map[string]string{"dominio": d})
+		// 400 quando o domínio é recusado; 503 quando a máquina não tem o observador
+		// (o caso do ambiente de teste). O que não pode é ser aceito.
+		if resp.StatusCode == http.StatusAccepted {
+			t.Errorf("domínio inválido %q foi aceito", d)
+		}
+	}
 }
