@@ -258,7 +258,7 @@ Description=Configuração de domínio do VOD Manager (disparada pelo painel)
 Type=oneshot
 # O pedido carrega o domínio e o e-mail, e é consumido ANTES de começar: se o script
 # falhar, o arquivo já não existe e a tarefa não fica repetindo em laço.
-ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/solicitar-dominio; rm -f /opt/vodmanager/solicitar-dominio; ${FONTE}/scripts/dominio.sh "$d" "$e"'
+ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/solicitar-dominio; rm -f /opt/vodmanager/solicitar-dominio; ${FONTE}/scripts/dominio.sh "\$d" "\$e"'
 UNIT
 
 cat > /etc/systemd/system/vodmanager-domain.path <<UNIT
