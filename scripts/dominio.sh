@@ -40,6 +40,8 @@ erro()    { printf '\n\033[31merro: %s\033[0m\n' "$*" >&2; }
 [ "$(id -u)" -eq 0 ] || { erro "rode com sudo."; exit 1; }
 
 mkdir -p /opt/vodmanager/runtime
+# O dono e o servico, nao o root: e dele que partem os pedidos gravados aqui.
+chown vodmanager:vodmanager /opt/vodmanager/runtime 2>/dev/null || true
 exec > >(tee "$REGISTRO") 2>&1
 chown vodmanager:vodmanager "$REGISTRO" 2>/dev/null || true
 [ -n "$DOMINIO" ] || { erro "informe o domínio."; exit 2; }

@@ -96,7 +96,18 @@ passo "4/9  Usuário do sistema"
 
 id -u vodmanager >/dev/null 2>&1 || \
     useradd --system --home /opt/vodmanager --shell /usr/sbin/nologin vodmanager
+
+# Pasta de trabalho do serviço, separada da pasta do binário.
+#
+# O serviço precisa ESCREVER para pedir atualização ou configuração de domínio ao systemd.
+# Deixar /opt/vodmanager inteira gravável resolveria — e daria ao processo exposto na
+# internet o poder de substituir o próprio binário. Então a escrita fica confinada aqui.
+#
+# O ReadWritePaths da unidade NÃO basta: ele levanta a proteção do systemd, não a permissão
+# do sistema de arquivos. São duas travas, e abrir só uma dá "permission denied".
 mkdir -p /opt/vodmanager/runtime
+chown vodmanager:vodmanager /opt/vodmanager/runtime
+chmod 0750 /opt/vodmanager/runtime
 verde "    vodmanager (sem shell, sem login)"
 
 # ---------------------------------------------------------------------------
