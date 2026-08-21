@@ -1475,7 +1475,7 @@ async function verCategorias() {
                   ${principais.filter(pr => pr.content_type === c.content_type).map(pr =>
                     `<option value="${pr.id}">${esc(pr.name)}</option>`).join('')}
                 </select>
-                <button class="btn btn-mini" data-unir="${c.id}"
+                <button class="btn btn-mini" data-unir-cat="${c.id}"
                         data-nome="${esc(c.name)}" data-itens="${c.content_count}">Unir</button>` : ''}
             </div></td>
           </tr>`).join('')}
@@ -1537,9 +1537,9 @@ async function verCategorias() {
   //
   // Apaga a categoria de origem, então confirma antes — e diz quantos conteúdos vão se
   // mover, que é o número que faz a pessoa perceber se escolheu a linha errada.
-  $('[data-unir]').forEach(b => {
+  $$('[data-unir-cat]').forEach(b => {
     b.onclick = () => comAcao(async () => {
-      const origem = b.dataset.unir;
+      const origem = b.dataset.unirCat;
       const seletor = $(`[data-uniao="${origem}"]`);
       const destino = seletor ? seletor.value : '';
       if (!destino) {
