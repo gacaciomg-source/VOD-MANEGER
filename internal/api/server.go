@@ -183,6 +183,7 @@ func (s *Server) routes() chi.Router {
 				r.Post("/source-categories/{id}/map", s.handleMapSourceCategory)
 				r.Patch("/categories/{id}", s.handleRenameCategory)
 				r.Put("/categories/{id}/principal", s.handleMarcarPrincipal)
+				r.Post("/categories/{id}/absorver", s.handleAbsorverCategoria)
 				r.Post("/categorias/pendencias/{id}/resolver", s.handleResolverPendencia)
 				// Unir conteúdos apaga um identificador que clientes podem ter importado: exige
 				// papel de escrita e fica registrado em evento.

@@ -195,3 +195,69 @@ func (s *Store) AplicarVinculoRetroativo(ctx context.Context, sourceCategoryID, 
 	}
 	return tag.RowsAffected(), nil
 }
+
+// AbsorverCategoria dobra uma categoria dentro de outra: o conteúdo passa para o destino
+// e a categoria de origem deixa de existir.
+//
+// É o caso de "esta pasta não deveria existir separada". Marcar como principal resolve o
+// lado de quem já está no lugar certo; não resolve o de quem está numa pasta que o
+// administrador não quer mais mostrar. Sem isto, a única saída seria deixar a categoria
+// de lado e ver o conteúdo dela sumir da lista dos clientes — perder acervo para arrumar
+// a estrutura, que é uma troca ruim.
+//
+// Move junto os vínculos de fonte. Se ficassem apontando para a categoria apagada, a
+// próxima sincronização recriaria a pendência e desfaria a decisão na prática.
+func (s *Store) AbsorverCategoria(ctx context.Context, origem, destino int64) (int64, error) {
+	if origem == destino {
+		return 0, wrapErr("unindo categorias", ErrInvalid)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, wrapErr("unindo categorias", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	// Tipos diferentes fariam filme aparecer em pasta de série. O banco não impede;
+	// aqui impede.
+	var tipoOrigem, tipoDestino string
+	var destinoPrincipal bool
+	if err := tx.QueryRow(ctx,
+		`SELECT content_type FROM categories WHERE id = $1`, origem).Scan(&tipoOrigem); err != nil {
+		return 0, wrapErr("unindo categorias: origem", err)
+	}
+	if err := tx.QueryRow(ctx,
+		`SELECT content_type, principal FROM categories WHERE id = $1`, destino).
+		Scan(&tipoDestino, &destinoPrincipal); err != nil {
+		return 0, wrapErr("unindo categorias: destino", err)
+	}
+	if tipoOrigem != tipoDestino {
+		return 0, wrapErr("unindo categorias: tipos diferentes", ErrInvalid)
+	}
+	if !destinoPrincipal {
+		return 0, wrapErr("unindo categorias: destino não é principal", ErrInvalid)
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE contents SET category_id = $2, updated_at = now() WHERE category_id = $1`,
+		origem, destino)
+	if err != nil {
+		return 0, wrapErr("unindo categorias: movendo conteúdo", err)
+	}
+	movidos := tag.RowsAffected()
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE source_categories SET category_id = $2 WHERE category_id = $1`,
+		origem, destino); err != nil {
+		return 0, wrapErr("unindo categorias: movendo vínculos", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM categories WHERE id = $1`, origem); err != nil {
+		return 0, wrapErr("unindo categorias: apagando origem", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, wrapErr("unindo categorias", err)
+	}
+	return movidos, nil
+}

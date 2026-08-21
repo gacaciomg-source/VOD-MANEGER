@@ -1452,7 +1452,10 @@ async function verCategorias() {
     ${outras.length ? `
       <div class="secao-titulo">Não são principais (${num(outras.length)})</div>
       <p class="discreto" style="margin:-6px 0 10px">
-        Existem no catálogo mas não são destino de nada. Marque as que você quer manter.
+        Existem no catálogo mas não são destino de nada — os seus clientes não veem estas
+        pastas. Há duas saídas: <b>tornar principal</b>, se a pasta deve aparecer como
+        está; ou <b>unir</b> a uma principal, se o conteúdo dela pertence a outra pasta.
+        Unir move o conteúdo e apaga a pasta antiga; nada de acervo se perde.
       </p>
       <div class="tabela-wrap"><table>
         <thead><tr>
@@ -1463,8 +1466,18 @@ async function verCategorias() {
             <td>${esc(c.name)}</td>
             <td><span class="etiqueta neutro">${rotuloTipo(c.content_type)}</span></td>
             <td class="numero">${num(c.content_count)}</td>
-            <td><button class="btn btn-mini btn-primario" data-principal="${c.id}"
-                        data-valor="true">Tornar principal</button></td>
+            <td><div class="grupo-botoes">
+              <button class="btn btn-mini btn-primario" data-principal="${c.id}"
+                      data-valor="true">Tornar principal</button>
+              ${principais.some(pr => pr.content_type === c.content_type) ? `
+                <select data-uniao="${c.id}" style="min-width:170px">
+                  <option value="">— unir a… —</option>
+                  ${principais.filter(pr => pr.content_type === c.content_type).map(pr =>
+                    `<option value="${pr.id}">${esc(pr.name)}</option>`).join('')}
+                </select>
+                <button class="btn btn-mini" data-unir="${c.id}"
+                        data-nome="${esc(c.name)}" data-itens="${c.content_count}">Unir</button>` : ''}
+            </div></td>
           </tr>`).join('')}
         </tbody></table></div>` : ''}
   `;
@@ -1517,6 +1530,41 @@ async function verCategorias() {
         'Nome da pasta que os seus clientes vão ver:', p.declared_name);
       if (nome === null) return;
       await resolver(p, { promover: true, nome }, b);
+    });
+  });
+
+  // Unir uma categoria a uma principal.
+  //
+  // Apaga a categoria de origem, então confirma antes — e diz quantos conteúdos vão se
+  // mover, que é o número que faz a pessoa perceber se escolheu a linha errada.
+  $('[data-unir]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const origem = b.dataset.unir;
+      const seletor = $(`[data-uniao="${origem}"]`);
+      const destino = seletor ? seletor.value : '';
+      if (!destino) {
+        aviso('Escolha ao lado a categoria principal que vai receber o conteúdo.', 'erro');
+        return;
+      }
+      const nomeDestino = seletor.options[seletor.selectedIndex].textContent.trim();
+      const itens = Number(b.dataset.itens) || 0;
+      const ok = await confirmar('Unir categoria',
+        `Mover ${num(itens)} conteúdo(s) de "${b.dataset.nome}" para "${nomeDestino}" ` +
+        `e apagar a pasta "${b.dataset.nome}"? O conteúdo não é apagado.`);
+      if (!ok) return;
+
+      b.disabled = true;
+      try {
+        const r = await api(`/categories/${origem}/absorver`, {
+          method: 'POST',
+          corpo: { categoria_id: Number(destino) },
+        });
+        aviso(`Unido. ${num(r.conteudos_movidos || 0)} conteúdo(s) movido(s).`, 'ok');
+        navegar();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
     });
   });
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -136,5 +137,44 @@ func (s *Server) handleResolverPendencia(w http.ResponseWriter, r *http.Request)
 		"categoria da fonte vinculada: "+alvo.Declarado, actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"ok": true, "categoria_id": destino, "conteudos_movidos": movidos,
+	})
+}
+
+type absorverRequest struct {
+	// CategoriaID é o destino: a principal que vai receber o conteúdo.
+	CategoriaID int64 `json:"categoria_id"`
+}
+
+// handleAbsorverCategoria une uma categoria a uma principal.
+//
+// Apaga a categoria de origem, e um identificador apagado pode estar em uso do outro lado
+// (um cliente que guardou a pasta). Por isso exige papel de escrita e fica registrado.
+func (s *Server) handleAbsorverCategoria(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	var req absorverRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		return
+	}
+	if req.CategoriaID <= 0 {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+			"informe categoria_id: a principal que recebe o conteúdo", "categoria_id")
+		return
+	}
+
+	movidos, err := s.deps.Store.AbsorverCategoria(r.Context(), id, req.CategoriaID)
+	if err != nil {
+		s.fail(w, r, err, "unindo categorias")
+		return
+	}
+
+	s.logEvent(r, "catalog", "info", fmt.Sprintf(
+		"categoria %d unida à principal %d (%d conteúdo(s) movido(s))", id, req.CategoriaID, movidos),
+		actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
+		"ok": true, "conteudos_movidos": movidos,
 	})
 }
