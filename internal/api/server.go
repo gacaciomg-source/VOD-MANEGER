@@ -127,6 +127,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/episodes/{id}", s.handleGetEpisode)
 			r.Get("/categories", s.handleListCategories)
 			r.Get("/source-categories", s.handleListSourceCategories)
+			r.Get("/categorias/pendencias", s.handleListPendencias)
 			r.Get("/unresolved", s.handleListUnresolved)
 			r.Get("/sync/runs", s.handleListSyncRuns)
 			r.Get("/sync/runs/{id}", s.handleGetSyncRun)
@@ -178,6 +179,8 @@ func (s *Server) routes() chi.Router {
 				r.Delete("/stream-credentials/{id}", s.handleDeleteStreamCredential)
 				r.Post("/source-categories/{id}/map", s.handleMapSourceCategory)
 				r.Patch("/categories/{id}", s.handleRenameCategory)
+				r.Put("/categories/{id}/principal", s.handleMarcarPrincipal)
+				r.Post("/categorias/pendencias/{id}/resolver", s.handleResolverPendencia)
 				// Expõe a URL de origem: exige escrita e é registrado em evento.
 				r.Get("/variants/{vid}/origin-url", s.handleVariantOriginURL)
 			})

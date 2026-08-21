@@ -134,6 +134,37 @@ function fecharModal() {
 }
 
 /** Confirmação explícita para ações destrutivas. */
+// perguntar pede um texto ao administrador.
+//
+// Existe em vez do prompt() do navegador porque o prompt nativo é bloqueado por alguns
+// navegadores e não combina com o resto do painel — e uma caixa que às vezes não abre é
+// pior que uma que sempre abre.
+function perguntar(titulo, mensagem, valorInicial = '') {
+  return new Promise(resolve => {
+    abrirModal(titulo, `
+      <p class="discreto">${esc(mensagem)}</p>
+      <label><input id="pergunta-valor" value="${esc(valorInicial)}"></label>
+      <div class="grupo-botoes">
+        <button class="btn" data-acao="cancelar">Cancelar</button>
+        <button class="btn btn-primario" data-acao="confirmar">Confirmar</button>
+      </div>
+    `, corpo => {
+      const campo = corpo.querySelector('#pergunta-valor');
+      campo.focus();
+      campo.select();
+      const confirmar = () => {
+        const v = campo.value.trim();
+        if (!v) return;
+        fecharModal();
+        resolve(v);
+      };
+      campo.onkeydown = e => { if (e.key === 'Enter') confirmar(); };
+      corpo.querySelector('[data-acao=cancelar]').onclick = () => { fecharModal(); resolve(null); };
+      corpo.querySelector('[data-acao=confirmar]').onclick = confirmar;
+    });
+  });
+}
+
 function confirmar(titulo, mensagem, rotuloConfirmar = 'Confirmar') {
   return new Promise(resolve => {
     abrirModal(titulo, `
@@ -1285,51 +1316,158 @@ async function abrirEpisodio(id) {
 // ---------------------------------------------------------------------------
 
 async function verCategorias() {
-  const [{ categories }, { source_categories }] = await Promise.all([
+  const [{ categories }, { pendencias }] = await Promise.all([
     api('/categories'),
-    api('/source-categories'),
+    api('/categorias/pendencias'),
   ]);
 
-  if (!categories.length && !source_categories.length) {
-    $('#visao').innerHTML = `<div class="cartao"><div class="vazio">
-      <span class="icone">🗂️</span><h3>Nenhuma categoria</h3>
-      <p>As categorias aparecem aqui depois da primeira sincronização.</p></div></div>`;
-    return;
-  }
+  const principais = categories.filter(c => c.principal);
+  const outras = categories.filter(c => !c.principal);
 
-  // Só vale sugerir unificação quando há mais de uma fonte — com uma só, cada categoria
-  // aparece uma vez e não existe duplicata para resolver.
-  const fontes = new Set(source_categories.map(sc => sc.source_id));
-  const comSugestao = source_categories.filter(sc => sc.suggestions.length > 0);
+  const rotuloTipo = t => t === 'movie' ? 'filmes' : 'séries';
 
   $('#visao').innerHTML = `
-    ${fontes.size > 1 && comSugestao.length ? `
-      <div class="cartao" style="margin-top:0;border-color:#4a3a12">
-        <h2>⚠️ ${num(comSugestao.length)} categoria(s) de fonte parecem duplicadas</h2>
-        <p class="discreto" style="margin:-8px 0 14px">
-          Fontes diferentes costumam nomear a mesma categoria de formas diferentes.
-          Unifique-as para o catálogo não ficar com "AÇÃO", "Ação" e "FILMES | ACAO" separadas.
-        </p>
-        ${tabelaMapeamento(comSugestao)}
-      </div>` : ''}
+    <p class="discreto" style="margin:0 0 14px">
+      As <b>categorias principais</b> são as pastas que os seus clientes veem. A
+      sincronização não cria pasta nenhuma: ela só usa estas, e o que você vincular.
+      <br><br>
+      Uma categoria de fonte com nome idêntico ao de uma principal é vinculada sozinha.
+      O que não casa vira <b>pendência</b> — uma decisão que você toma uma vez e vale para
+      sempre, inclusive nas próximas sincronizações.
+    </p>
 
-    <div class="secao-titulo">Categorias do catálogo</div>
-    ${categories.length ? `<div class="tabela-wrap"><table>
-      <thead><tr><th>Categoria</th><th>Tipo</th><th>Forma normalizada</th><th class="numero">Conteúdos</th><th style="width:1%"></th></tr></thead>
-      <tbody>${categories.map(c => `
+    ${pendencias.length ? `
+      <div class="cartao" style="margin-top:0;border-color:#4a3a12">
+        <h2>${num(pendencias.length)} categoria(s) esperando decisão</h2>
+        <p class="discreto" style="margin:-8px 0 14px">
+          O conteúdo delas continua disponível e reproduzível — só ainda não tem pasta.
+        </p>
+        <div class="tabela-wrap"><table>
+          <thead><tr>
+            <th>Como a fonte chama</th><th>Fonte</th><th>Tipo</th>
+            <th>Vincular a</th><th style="width:1%"></th>
+          </tr></thead>
+          <tbody>${pendencias.map((p, i) => `
+            <tr>
+              <td><b>${esc(p.declared_name)}</b>
+                  ${p.sugestao_id ? '<div class="dica">nome idêntico a uma principal</div>' : ''}</td>
+              <td class="discreto">${esc(p.source_name)}</td>
+              <td><span class="etiqueta info">${rotuloTipo(p.content_type)}</span></td>
+              <td>
+                <select data-destino="${i}" style="min-width:200px">
+                  <option value="">— escolha —</option>
+                  ${principais.filter(c => c.content_type === p.content_type).map(c => `
+                    <option value="${c.id}" ${String(p.sugestao_id) === String(c.id) ? 'selected' : ''}>
+                      ${esc(c.name)}</option>`).join('')}
+                </select>
+              </td>
+              <td><div class="grupo-botoes">
+                <button class="btn btn-mini btn-primario" data-vincular="${i}">Vincular</button>
+                <button class="btn btn-mini" data-promover="${i}"
+                        title="Cria uma pasta nova com este nome">Criar pasta</button>
+              </div></td>
+            </tr>`).join('')}
+          </tbody></table></div>
+      </div>` : `
+      <div class="cartao" style="margin-top:0">
+        <div class="vazio" style="padding:20px">
+          <span class="icone">✅</span>
+          <h3>Nenhuma pendência</h3>
+          <p>Toda categoria das suas fontes já tem destino definido.</p>
+        </div>
+      </div>`}
+
+    <div class="secao-titulo">Categorias principais (${num(principais.length)})</div>
+    ${principais.length ? `<div class="tabela-wrap"><table>
+      <thead><tr>
+        <th>Categoria</th><th>Tipo</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
+      </tr></thead>
+      <tbody>${principais.map(c => `
         <tr data-id="${c.id}" data-tipo="${c.content_type}">
           <td><b class="abrir-categoria linha-clicavel">${esc(c.name)}</b></td>
-          <td><span class="etiqueta info">${c.content_type === 'movie' ? 'filmes' : 'séries'}</span></td>
-          <td class="mono discreto">${esc(c.normalized_name)}</td>
+          <td><span class="etiqueta info">${rotuloTipo(c.content_type)}</span></td>
           <td class="numero">${num(c.content_count)}</td>
-          <td><button class="btn btn-mini" data-renomear="${c.id}" data-nome="${esc(c.name)}">Renomear</button></td>
+          <td><div class="grupo-botoes">
+            <button class="btn btn-mini" data-renomear="${c.id}" data-nome="${esc(c.name)}">Renomear</button>
+            <button class="btn btn-mini" data-principal="${c.id}" data-valor="false">Desmarcar</button>
+          </div></td>
         </tr>`).join('')}
-      </tbody></table></div>` : '<p class="discreto">Nenhuma categoria canônica ainda.</p>'}
+      </tbody></table></div>`
+      : `<div class="cartao"><div class="erro">
+          Nenhuma categoria principal. Seus clientes não veem pasta nenhuma até você
+          marcar pelo menos uma abaixo, ou criar uma a partir de uma pendência.
+        </div></div>`}
 
-    ${source_categories.length ? `
-      <div class="secao-titulo">Como cada fonte nomeia (${num(source_categories.length)})</div>
-      ${tabelaMapeamento(source_categories)}` : ''}
+    ${outras.length ? `
+      <div class="secao-titulo">Não são principais (${num(outras.length)})</div>
+      <p class="discreto" style="margin:-6px 0 10px">
+        Existem no catálogo mas não são destino de nada. Marque as que você quer manter.
+      </p>
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Categoria</th><th>Tipo</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
+        </tr></thead>
+        <tbody>${outras.map(c => `
+          <tr data-id="${c.id}" data-tipo="${c.content_type}">
+            <td>${esc(c.name)}</td>
+            <td><span class="etiqueta neutro">${rotuloTipo(c.content_type)}</span></td>
+            <td class="numero">${num(c.content_count)}</td>
+            <td><button class="btn btn-mini btn-primario" data-principal="${c.id}"
+                        data-valor="true">Tornar principal</button></td>
+          </tr>`).join('')}
+        </tbody></table></div>` : ''}
   `;
+
+  // Marcar e desmarcar principal.
+  $$('[data-principal]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      try {
+        await api(`/categories/${b.dataset.principal}/principal`, {
+          method: 'PUT',
+          corpo: { principal: b.dataset.valor === 'true' },
+        });
+        navegar();
+      } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
+    });
+  });
+
+  // Resolver pendências.
+  const resolver = async (p, corpo, botao) => {
+    botao.disabled = true;
+    try {
+      const r = await api(`/categorias/pendencias/${p.id}/resolver`, { method: 'POST', corpo });
+      const movidos = r.conteudos_movidos || 0;
+      aviso(movidos > 0
+        ? `Vinculado. ${num(movidos)} conteúdo(s) movido(s) para a pasta.`
+        : 'Vinculado.', 'ok');
+      navegar();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      botao.disabled = false;
+    }
+  };
+
+  $$('[data-vincular]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const i = Number(b.dataset.vincular);
+      const destino = $(`[data-destino="${i}"]`).value;
+      if (!destino) {
+        aviso('Escolha uma categoria, ou use "Criar pasta".', 'erro');
+        return;
+      }
+      await resolver(pendencias[i], { categoria_id: Number(destino) }, b);
+    });
+  });
+
+  $$('[data-promover]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const p = pendencias[Number(b.dataset.promover)];
+      const nome = await perguntar('Criar categoria principal',
+        'Nome da pasta que os seus clientes vão ver:', p.declared_name);
+      if (nome === null) return;
+      await resolver(p, { promover: true, nome }, b);
+    });
+  });
 
   ligarAcoesCategorias(categories);
 }
@@ -2289,6 +2427,38 @@ function etiquetaEntrega(resultado) {
 // Tela: Credenciais de saída
 // ---------------------------------------------------------------------------
 
+// cotaEsgotada repete no navegador a regra que o servidor aplica.
+//
+// Duplicar a lógica não é ideal, mas a alternativa seria uma consulta por linha só para
+// pintar um rótulo. A regra é curta e está testada do lado do servidor, que é quem manda.
+function cotaEsgotada(c) {
+  if (!c.bytes_limit) return false;
+  if (c.ciclo === 'mensal') {
+    const inicio = new Date(c.ciclo_inicio);
+    const agora = new Date();
+    const inicioDoMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
+    if (inicio < inicioDoMes) return false; // o mês virou: cota renovada
+  }
+  return c.bytes_ciclo >= c.bytes_limit;
+}
+
+// celulaDeCota mostra o consumo do jeito que a pergunta é feita: "quanto falta?".
+function celulaDeCota(c) {
+  if (!c.bytes_limit) {
+    return `${formatarBytes(c.bytes_served)}<div class="dica">sem limite</div>`;
+  }
+  // Quando o mês virou, o consumo do ciclo anterior não conta mais.
+  const renovou = c.ciclo === 'mensal' && !cotaEsgotada(c) && c.bytes_ciclo >= c.bytes_limit;
+  const usado = renovou ? 0 : c.bytes_ciclo;
+  const pct = Math.min(100, Math.round((usado / c.bytes_limit) * 100));
+  const nivel = pct >= 100 ? 'erro' : pct >= 80 ? 'alerta' : 'ok';
+  return `
+    <b>${formatarBytes(usado)}</b> de ${formatarBytes(c.bytes_limit)}
+    <div class="barra-uso"><div class="barra-uso-preenchida ${nivel}"
+         style="width:${pct}%"></div></div>
+    <div class="dica">${pct}%${c.ciclo === 'mensal' ? ' · renova dia 1º' : ''}</div>`;
+}
+
 async function verCredenciais() {
   const { credentials } = await api('/stream-credentials');
 
@@ -2298,6 +2468,9 @@ async function verCredenciais() {
 
   const estadoDe = c => {
     if (c.revoked_at) return '<span class="etiqueta erro">revogada</span>';
+    // Cota esgotada é situação diferente de revogada: uma é "acabou o pacote", a outra é
+    // "você perdeu o acesso". Quem atende o cliente precisa distinguir de relance.
+    if (cotaEsgotada(c)) return '<span class="etiqueta alerta">cota esgotada</span>';
     if (!c.enabled) return '<span class="etiqueta neutro">desativada</span>';
     if (c.expires_at && new Date(c.expires_at) < new Date()) {
       return '<span class="etiqueta alerta">expirada</span>';
@@ -2325,7 +2498,7 @@ async function verCredenciais() {
         <thead><tr>
           <th>Nome</th><th>Usuário</th><th>Estado</th>
           <th class="numero">Assistindo</th><th class="numero">Limite</th>
-          <th class="numero">Usos</th><th class="numero">Transferido</th>
+          <th class="numero">Usos</th><th>Consumo</th>
           <th>Último uso</th><th style="width:1%"></th>
         </tr></thead>
         <tbody>${credentials.map(({ credential: c, active_connections: ativas }) => `
@@ -2336,7 +2509,7 @@ async function verCredenciais() {
             <td class="numero">${ativas > 0 ? `<span class="etiqueta ok">${num(ativas)}</span>` : '0'}</td>
             <td class="numero">${c.max_connections != null ? num(c.max_connections) : '<span class="discreto">sem limite</span>'}</td>
             <td class="numero">${num(c.use_count)}</td>
-            <td class="numero">${formatarBytes(c.bytes_served)}</td>
+            <td>${celulaDeCota(c)}</td>
             <td class="discreto">${tempoRelativo(c.last_used_at)}</td>
             <td><div class="grupo-botoes">
               <button class="btn btn-mini" data-lista="${c.id}">Lista</button>
@@ -2420,7 +2593,38 @@ function formularioEditarCredencial(c) {
       É o que impede o cliente de repassar a senha: passando do limite, as reproduções
       extras recebem recusa. Deixe vazio para não limitar.
     </p>
-    <label style="flex-direction:row;align-items:center;gap:8px">
+    <div class="secao-titulo" style="margin:18px 0 8px">Cota de banda</div>
+    <label>Limite em GB
+      <input id="ec-cota" type="number" min="0" step="0.5"
+             value="${c.bytes_limit ? (c.bytes_limit / 1073741824).toFixed(1) : ''}"
+             placeholder="vazio ou 0 = sem limite">
+    </label>
+    <label>Renovação
+      <select id="ec-ciclo">
+        <option value="nenhum" ${c.ciclo !== 'mensal' ? 'selected' : ''}>
+          Não renova — quando acabar, acabou
+        </option>
+        <option value="mensal" ${c.ciclo === 'mensal' ? 'selected' : ''}>
+          Mensal — zera todo dia 1º
+        </option>
+      </select>
+    </label>
+    <p class="dica">
+      Ao atingir a cota, a lista e o vídeo param de funcionar para este cliente até você
+      aumentar o limite, zerar o ciclo, ou o mês virar.
+      ${c.bytes_limit ? `<br>Consumo no ciclo atual: <b>${formatarBytes(c.bytes_ciclo)}</b> de ${formatarBytes(c.bytes_limit)}.` : ''}
+    </p>
+    ${c.bytes_ciclo > 0 ? `
+      <label class="linha-check">
+        <input type="checkbox" id="ec-zerar"> Zerar o consumo agora
+      </label>
+      <p class="dica">
+        Recomeça a contagem sem esperar a virada do mês — é o caminho de "o cliente pagou
+        um pacote extra".
+      </p>` : ''}
+
+    <div class="secao-titulo" style="margin:18px 0 8px">Estado</div>
+    <label class="linha-check">
       <input type="checkbox" id="ec-ativa" ${c.enabled ? 'checked' : ''}> Credencial ativa
     </label>
     <p class="dica">
@@ -2440,11 +2644,18 @@ function formularioEditarCredencial(c) {
       e.target.disabled = true;
 
       const bruto = corpo.querySelector('#ec-max').value.trim();
+      const cota = corpo.querySelector('#ec-cota').value.trim();
+      const zerar = corpo.querySelector('#ec-zerar');
       const dados = {
         name: corpo.querySelector('#ec-nome').value,
         description: corpo.querySelector('#ec-desc').value,
         enabled: corpo.querySelector('#ec-ativa').checked,
         max_connections: bruto === '' ? null : Number(bruto),
+        // Zero significa "sem limite": mais natural que apagar o campo, e sem a
+        // ambiguidade entre "não mexer" e "remover".
+        bytes_limit_gb: cota === '' ? 0 : Number(cota),
+        ciclo: corpo.querySelector('#ec-ciclo').value,
+        zerar_ciclo: !!(zerar && zerar.checked),
       };
       try {
         await api(`/stream-credentials/${c.id}`, { method: 'PATCH', corpo: dados });

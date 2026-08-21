@@ -101,6 +101,8 @@ func motivo(err error) string {
 	switch {
 	case errors.Is(err, edge.ErrCredencialRevogada):
 		return "revogada ou expirada"
+	case errors.Is(err, edge.ErrCotaEsgotada):
+		return "cota de banda esgotada"
 	case errors.Is(err, edge.ErrOrigemNaoPermitida):
 		return "origem não autorizada"
 	default:

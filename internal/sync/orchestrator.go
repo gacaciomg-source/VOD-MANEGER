@@ -311,6 +311,13 @@ type indices struct {
 	conteudos  *store.ContentIndex
 	series     *store.SeriesIndex
 	categorias store.CategoryIndex
+	// principais são as pastas que o administrador escolheu manter; vinculos são as
+	// decisões que ele já tomou para ESTA fonte. A sincronização não sai desses dois.
+	principais map[string]int64
+	vinculos   map[string]int64
+	// pendentes acumula o que apareceu sem destino, para registrar uma vez só no fim em
+	// vez de a cada item que cair na mesma categoria.
+	pendentes map[string]store.CategoriaPendente
 }
 
 // carregarIndices lê de uma vez tudo que a sincronização consultaria item a item.
@@ -342,7 +349,24 @@ func (o *Orchestrator) carregarIndices(ctx context.Context, sourceID int64) (*in
 		"source_id", sourceID, "variantes", len(variantes), "categorias", len(categorias),
 		"duracao", time.Since(inicio).Round(time.Millisecond).String())
 
-	return &indices{variantes: variantes, conteudos: conteudos, series: series, categorias: categorias}, nil
+	principais, err := o.store.CategoriasPrincipais(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vinculos, err := o.store.VinculosDaFonte(ctx, sourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &indices{
+		variantes:  variantes,
+		conteudos:  conteudos,
+		series:     series,
+		categorias: categorias,
+		principais: principais,
+		vinculos:   vinculos,
+		pendentes:  map[string]store.CategoriaPendente{},
+	}, nil
 }
 
 func (o *Orchestrator) executar(ctx context.Context, src *store.Source, cfg sources.Config, provider sources.Provider, runID int64, inicio time.Time) (*Report, error) {
@@ -455,6 +479,11 @@ func (o *Orchestrator) executar(ctx context.Context, src *store.Source, cfg sour
 	if err := flush(); err != nil {
 		return rel, err
 	}
+	// As categorias vistas são gravadas uma vez, no fim: uma escrita por categoria
+	// distinta, e não por item que caiu nela.
+	if err := o.gravarCategoriasVistas(ctx, src.ID, idx); err != nil {
+		o.log.Warn("falha ao registrar categorias da fonte", "source_id", src.ID, "erro", err)
+	}
 
 	rel.Requests = resultado.Requests
 	rel.Partial = resultado.Partial
@@ -465,7 +494,7 @@ func (o *Orchestrator) executar(ctx context.Context, src *store.Source, cfg sour
 	}
 
 	// Categorias declaradas pela fonte.
-	if err := o.aplicarCategorias(ctx, src.ID, resultado.Categories); err != nil {
+	if err := o.aplicarCategorias(ctx, src.ID, resultado.Categories, idx); err != nil {
 		o.log.Warn("falha ao registrar categorias", "source_id", src.ID, "erro", err)
 	}
 
@@ -730,46 +759,109 @@ func (o *Orchestrator) resolverEpisodio(ctx context.Context, item ingest.Normali
 	return alvoVariante{kind: store.TargetEpisode, id: episodioID}, nil
 }
 
-func (o *Orchestrator) categoriaDoItem(ctx context.Context, item ingest.NormalizedItem, tipo string, idx *indices) (int64, error) {
-	if item.Category.NormalizedName == "" {
+// categoriaDoItem decide em que pasta o conteúdo entra.
+//
+// A sincronização NÃO cria pasta. Antes, cada nome de categoria vindo de uma fonte virava
+// uma categoria canônica nova — e por isso "Filmes | Lancamentos" e "LANÇAMENTOS" viravam
+// duas pastas que alguém tinha que mesclar depois, a cada fonte nova.
+//
+// Agora só existem três respostas possíveis:
+//
+//  1. Há vínculo decidido para esta fonte → usa ele. A decisão vale para sempre.
+//  2. Há uma PRINCIPAL com o mesmo nome → vincula sozinho. Nome idêntico é a única
+//     equivalência que não erra; as sugestões por semelhança produziam propostas absurdas.
+//  3. Nenhuma das duas → vira pendência, e o conteúdo fica sem pasta até o administrador
+//     decidir. Continua disponível e reproduzível; só não inventa uma pasta.
+func (o *Orchestrator) categoriaDoItem(_ context.Context, item ingest.NormalizedItem, tipo string, idx *indices) (int64, error) {
+	nome := item.Category.NormalizedName
+	if nome == "" {
 		return 0, nil
 	}
-	if id, ok := idx.categorias.Get(item.Category.NormalizedName, tipo); ok {
+	chave := store.ChaveCategoria(nome, tipo)
+
+	if id, ok := idx.vinculos[chave]; ok {
 		return id, nil
 	}
-	id, err := o.store.EnsureCategory(ctx, item.Category.DeclaredName, item.Category.NormalizedName, tipo)
-	if err != nil {
-		return 0, err
+	if id, ok := idx.principais[chave]; ok {
+		// Vínculo automático por nome idêntico: registrado abaixo, no fim da execução.
+		idx.vinculos[chave] = id
+		idx.pendentes[chave] = store.CategoriaPendente{
+			Declarado: item.Category.DeclaredName, Normalizado: nome, ContentType: tipo,
+			SugestaoID: &id,
+		}
+		return id, nil
 	}
-	idx.categorias.Set(item.Category.NormalizedName, tipo, id)
-	return id, nil
+
+	if _, jaVista := idx.pendentes[chave]; !jaVista {
+		idx.pendentes[chave] = store.CategoriaPendente{
+			Declarado: item.Category.DeclaredName, Normalizado: nome, ContentType: tipo,
+		}
+	}
+	return 0, nil
 }
 
-func (o *Orchestrator) aplicarCategorias(ctx context.Context, sourceID int64, cats []sources.Category) error {
+// gravarCategoriasVistas registra, ao fim da execução, o que apareceu nesta fonte.
+//
+// Uma escrita por categoria distinta, e não por item: um catálogo de 250 mil episódios
+// costuma ter algumas dezenas de categorias.
+func (o *Orchestrator) gravarCategoriasVistas(ctx context.Context, sourceID int64, idx *indices) error {
+	for _, p := range idx.pendentes {
+		if p.SugestaoID != nil {
+			// Casou por nome com uma principal: grava já vinculada, para não voltar a
+			// aparecer como pendência.
+			if err := o.store.UpsertSourceCategory(ctx, sourceID, "", p.Declarado,
+				p.Normalizado, p.ContentType, *p.SugestaoID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := o.store.RegistrarPendencia(ctx, sourceID, "", p.Declarado,
+			p.Normalizado, p.ContentType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// aplicarCategorias registra as categorias que a FONTE declara.
+//
+// Duas mudanças em relação ao que era feito antes:
+//
+//  1. Não cria categoria canônica. Criar uma pasta por nome declarado era o que produzia
+//     pastas duplicadas a cada fonte nova.
+//  2. Não registra nada com tipo "unknown". Quando a fonte não diz se a categoria é de
+//     filme ou de série — o caso do M3U, que só tem group-title —, quem registra é o
+//     caminho por item, que já conhece o tipo verdadeiro. Registrar aqui também criaria
+//     duas pendências para a mesma categoria: uma "unknown" e outra com o tipo certo.
+func (o *Orchestrator) aplicarCategorias(ctx context.Context, sourceID int64, cats []sources.Category, idx *indices) error {
 	for _, c := range cats {
 		nome := strings.TrimSpace(c.Name)
 		if nome == "" {
 			continue
 		}
-		normalizado := ingest.NormalizeName(nome)
 		tipo := c.ContentType
-
-		// Quando a fonte não diz se a categoria é de filme ou de série (o caso do M3U,
-		// onde só existe group-title), NÃO criamos categoria canônica. Criar uma com
-		// tipo "unknown" duplicaria no painel toda categoria que os itens já criam com
-		// o tipo certo — bug visto no primeiro sync real.
 		if tipo != store.ContentMovie && tipo != store.ContentSeries {
-			if err := o.store.UpsertSourceCategory(ctx, sourceID, c.ExternalID, nome, normalizado, "unknown", 0); err != nil {
+			continue
+		}
+
+		normalizado := ingest.NormalizeName(nome)
+		chave := store.ChaveCategoria(normalizado, tipo)
+
+		// Já decidida antes: nada a fazer, e não volta a aparecer como pendência.
+		if _, ok := idx.vinculos[chave]; ok {
+			continue
+		}
+		// Nome idêntico ao de uma principal: vincula sozinho.
+		if id, ok := idx.principais[chave]; ok {
+			idx.vinculos[chave] = id
+			if err := o.store.UpsertSourceCategory(ctx, sourceID, c.ExternalID, nome,
+				normalizado, tipo, id); err != nil {
 				return err
 			}
 			continue
 		}
-
-		canonicaID, err := o.store.EnsureCategory(ctx, nome, normalizado, tipo)
-		if err != nil {
-			return err
-		}
-		if err := o.store.UpsertSourceCategory(ctx, sourceID, c.ExternalID, nome, normalizado, tipo, canonicaID); err != nil {
+		if err := o.store.RegistrarPendencia(ctx, sourceID, c.ExternalID, nome,
+			normalizado, tipo); err != nil {
 			return err
 		}
 	}

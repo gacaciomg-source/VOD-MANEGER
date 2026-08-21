@@ -28,6 +28,11 @@ var (
 	ErrCredencialRevogada = errors.New("credencial revogada ou expirada")
 	// ErrOrigemNaoPermitida indica IP fora dos CIDRs autorizados.
 	ErrOrigemNaoPermitida = errors.New("origem não autorizada para esta credencial")
+	// ErrCotaEsgotada indica que o cliente consumiu toda a banda contratada.
+	//
+	// Separado de revogada de propósito: são situações diferentes para quem atende o
+	// cliente. Revogada é "você perdeu o acesso"; cota esgotada é "acabou o pacote".
+	ErrCotaEsgotada = errors.New("cota de banda esgotada para esta credencial")
 )
 
 // ttlCacheCredencial é por quanto tempo uma credencial verificada fica em memória.
@@ -95,7 +100,15 @@ func (a *Authenticator) Autenticar(ctx context.Context, username, senha, clientI
 	if !senhaOK {
 		return nil, ErrCredencialInvalida
 	}
-	if !cred.Ativa(time.Now()) {
+	agora := time.Now()
+	// A cota é verificada com o que estava no banco há no máximo alguns segundos: o cache
+	// de credencial e a contabilidade em lote fazem o bloqueio ser aproximado, não exato.
+	// É a troca certa — exatidão ao byte custaria uma consulta por requisição de vídeo, e
+	// alguns megabytes a mais não mudam nada num pacote de gigabytes.
+	if cred.CotaEsgotada(agora) {
+		return nil, ErrCotaEsgotada
+	}
+	if !cred.Ativa(agora) {
 		return nil, ErrCredencialRevogada
 	}
 	if !origemPermitida(cred.AllowedCIDRs, clientIP) {

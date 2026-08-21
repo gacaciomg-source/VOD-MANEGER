@@ -303,9 +303,67 @@ func TestCategoriasNaoDuplicam(t *testing.T) {
 		vistas[c.NormalizedName] = c.ContentType
 	}
 
-	// O fixture tem 5 group-titles distintos.
-	if len(cats) != 5 {
-		t.Errorf("categorias = %d, esperava 5 — uma por group-title do fixture", len(cats))
+	// A sincronização NÃO cria categoria: essa é a mudança de contrato. Antes, cada
+	// group-title virava uma pasta nova, e "Filmes | Lancamentos" de uma fonte e
+	// "LANÇAMENTOS" de outra viravam duas pastas para alguém mesclar depois.
+	if len(cats) != 0 {
+		t.Errorf("categorias criadas = %d, esperava 0 — a sincronização não deve criar pasta", len(cats))
+	}
+
+	// O que ela faz é registrar PENDÊNCIAS: uma decisão a tomar, uma vez.
+	pendencias, err := env.Store.ListarPendencias(ctx)
+	if err != nil {
+		t.Fatalf("ListarPendencias: %v", err)
+	}
+	if len(pendencias) != 5 {
+		t.Fatalf("pendências = %d, esperava 5 — uma por group-title do fixture", len(pendencias))
+	}
+	for _, p := range pendencias {
+		if p.Declarado == "" || p.ContentType == "unknown" {
+			t.Errorf("pendência mal formada: %+v", p)
+		}
+	}
+}
+
+// Depois que o administrador marca uma principal, a sincronização vincula sozinha o que
+// tiver nome idêntico — e essa categoria deixa de aparecer como pendência.
+func TestCategoriaPrincipalVinculaSozinhaPorNomeIdentico(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	lista := "#EXTM3U\n" +
+		`#EXTINF:-1 tvg-name="Filme A (2020)" group-title="Acao",Filme A (2020)` + "\n" +
+		"http://origem.exemplo.tld/movie/u/s/1.mp4\n"
+
+	// A principal existe ANTES da sincronização.
+	principalID, err := env.Store.CriarPrincipal(ctx, "Acao", "acao", "movie")
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+
+	fonte := novaFonteM3U(t, lista)
+	src := cadastrarFonte(t, env, "Fonte", store.SourceKindM3U, fonte.server.URL+"/lista.m3u", false)
+	orch := montarOrquestrador(t, env)
+	if _, err := orch.SyncSource(ctx, src.ID, "manual"); err != nil {
+		t.Fatalf("SyncSource: %v", err)
+	}
+
+	pendencias, err := env.Store.ListarPendencias(ctx)
+	if err != nil {
+		t.Fatalf("ListarPendencias: %v", err)
+	}
+	if len(pendencias) != 0 {
+		t.Errorf("pendências = %d, esperava 0 — o nome era idêntico ao da principal", len(pendencias))
+	}
+
+	// E o conteúdo entrou na pasta certa.
+	var categoria *int64
+	if err := env.Pool.QueryRow(ctx,
+		`SELECT category_id FROM contents WHERE type = 'movie' LIMIT 1`).Scan(&categoria); err != nil {
+		t.Fatalf("consultando conteúdo: %v", err)
+	}
+	if categoria == nil || *categoria != principalID {
+		t.Errorf("categoria do conteúdo = %v, esperava %d", categoria, principalID)
 	}
 }
 
@@ -338,8 +396,23 @@ func TestSincronizacaoXtreamPontaAPonta(t *testing.T) {
 	if stats.Episodes != 3 {
 		t.Errorf("episódios = %d, esperava 3", stats.Episodes)
 	}
-	if stats.Categories == 0 {
-		t.Error("nenhuma categoria foi registrada")
+	// A sincronização não cria categoria — quem decide é o administrador. O que ela faz é
+	// registrar as categorias da fonte como pendências, com o tipo correto que a API
+	// Xtream informa.
+	if stats.Categories != 0 {
+		t.Errorf("categorias criadas = %d, esperava 0", stats.Categories)
+	}
+	pendencias, err := env.Store.ListarPendencias(ctx)
+	if err != nil {
+		t.Fatalf("ListarPendencias: %v", err)
+	}
+	if len(pendencias) == 0 {
+		t.Error("nenhuma categoria da fonte foi registrada como pendência")
+	}
+	for _, p := range pendencias {
+		if p.ContentType != "movie" && p.ContentType != "series" {
+			t.Errorf("pendência com tipo inesperado %q: a API Xtream informa o tipo", p.ContentType)
+		}
 	}
 
 	// A variante de Xtream NÃO guarda URL: guarda a referência a resolver.

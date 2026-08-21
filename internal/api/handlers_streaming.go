@@ -345,7 +345,17 @@ type patchCredencialRequest struct {
 	Enabled        *bool     `json:"enabled"`
 	MaxConnections *int      `json:"max_connections"`
 	AllowedCIDRs   *[]string `json:"allowed_cidrs"`
+	// BytesLimitGB é a cota em GIGABYTES, que é como o administrador pensa e vende.
+	// A conversão para bytes acontece aqui, uma vez, em vez de espalhar multiplicações
+	// pelo painel e pelo banco.
+	BytesLimitGB *float64 `json:"bytes_limit_gb"`
+	Ciclo        *string  `json:"ciclo"`
+	ZerarCiclo   bool     `json:"zerar_ciclo"`
 }
+
+// bytesPorGB usa a base binária (1024), que é a mesma que o painel usa para exibir. Um
+// cliente que contratou 4 GB precisa ver "4,0 GB" quando esgotar, não "3,7 GB".
+const bytesPorGB = 1024 * 1024 * 1024
 
 // handleUpdateStreamCredential ajusta nome, limites e restrição de origem.
 func (s *Server) handleUpdateStreamCredential(w http.ResponseWriter, r *http.Request) {
@@ -365,9 +375,30 @@ func (s *Server) handleUpdateStreamCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if req.Ciclo != nil && *req.Ciclo != "nenhum" && *req.Ciclo != "mensal" {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+			"ciclo aceita apenas 'nenhum' ou 'mensal'", "ciclo")
+		return
+	}
+	if req.BytesLimitGB != nil && *req.BytesLimitGB < 0 {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+			"a cota não pode ser negativa; use 0 para remover o limite", "bytes_limit_gb")
+		return
+	}
+
 	patch := store.StreamCredentialPatch{
 		Name: req.Name, Description: req.Description, Enabled: req.Enabled,
-		AllowedCIDRs: req.AllowedCIDRs,
+		AllowedCIDRs: req.AllowedCIDRs, Ciclo: req.Ciclo, ZerarCiclo: req.ZerarCiclo,
+	}
+	if req.BytesLimitGB != nil {
+		// Zero significa "sem limite": é mais natural que apagar o campo, e evita a
+		// ambiguidade entre "não mexer" e "remover".
+		var cota *int64
+		if *req.BytesLimitGB > 0 {
+			b := int64(*req.BytesLimitGB * bytesPorGB)
+			cota = &b
+		}
+		patch.BytesLimit = &cota
 	}
 	// Presente no corpo = alterar (inclusive para nulo, que significa "sem limite").
 	if strings.Contains(bodyKeys(r), "max_connections") || req.MaxConnections != nil {

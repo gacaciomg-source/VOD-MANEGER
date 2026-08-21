@@ -15,7 +15,10 @@
 
 param(
     [Parameter(Position = 0)]
-    [string]$Mensagem
+    [string]$Mensagem,
+
+    # Usado apenas quando o repositorio local ainda nao tem remoto configurado.
+    [string]$RepositorioPadrao = "https://github.com/gacaciomg-source/VOD-MANEGER.git"
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,12 +94,28 @@ Ok $Mensagem
 # ---------------------------------------------------------------------------
 Passo "5/5  Enviando ao GitHub"
 
-git push
+# Sem remoto configurado, o push falha com uma mensagem longa do git que não diz o que
+# fazer neste projeto. Configuramos na hora, com o endereço conhecido.
+$temRemoto = git remote 2>$null
+if (-not $temRemoto) {
+    Write-Host "    remoto nao configurado; apontando para o repositorio do projeto" -ForegroundColor Yellow
+    git remote add origin $RepositorioPadrao
+}
+
+# -u na primeira vez liga o ramo local ao remoto; nas seguintes o git ja sabe o destino.
+$ramo = (git rev-parse --abbrev-ref HEAD)
+git push -u origin $ramo
 if (-not $?) {
-    Erro "o push falhou. O commit está feito localmente — corrija e rode 'git push'."
-    Write-Host "`nSe o remoto tiver trabalho que você não tem:" -ForegroundColor Yellow
-    Write-Host "    git pull --rebase" -ForegroundColor Yellow
+    Erro "o push foi recusado. O commit esta feito localmente; so o envio falhou."
+    Write-Host ""
+    Write-Host "Se o remoto tiver trabalho que voce nao tem:" -ForegroundColor Yellow
+    Write-Host "    git pull --rebase origin $ramo" -ForegroundColor Yellow
     Write-Host "    git push" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Se o remoto tiver historico SEM RELACAO com este - o caso de um" -ForegroundColor Yellow
+    Write-Host "repositorio criado por upload pela pagina do GitHub - o comando abaixo" -ForegroundColor Yellow
+    Write-Host "SUBSTITUI o que esta la pelo que voce tem aqui:" -ForegroundColor Yellow
+    Write-Host "    git push --force -u origin $ramo" -ForegroundColor Yellow
     exit 1
 }
 

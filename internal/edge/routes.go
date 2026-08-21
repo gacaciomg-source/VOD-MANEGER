@@ -173,6 +173,11 @@ func (p *Proxy) responderResolucao(w http.ResponseWriter, err error) {
 // configurou o XC_VM precisa saber se errou a senha ou se o acesso foi cortado.
 func (p *Proxy) negarAcesso(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrCotaEsgotada):
+		// 402 é o código de "pagamento necessário", e é exatamente a situação: o cliente
+		// consumiu o pacote. Distinguir de revogada importa para quem atende — são
+		// conversas diferentes com o cliente.
+		http.Error(w, "cota de banda esgotada", http.StatusPaymentRequired)
 	case errors.Is(err, ErrCredencialRevogada):
 		http.Error(w, "credencial revogada ou expirada", http.StatusForbidden)
 	case errors.Is(err, ErrOrigemNaoPermitida):

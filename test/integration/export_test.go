@@ -65,6 +65,10 @@ func montarExport(t *testing.T) *ambienteExport {
 		t.Fatalf("esperava 1 série, veio %v (%v)", series, err)
 	}
 
+	// A sincronização não cria pasta: quem decide é o administrador. Nos testes de
+	// exportação essa decisão precisa ser tomada, senão não há categoria para exportar.
+	promoverPendencias(t, env)
+
 	autenticador := edge.NewAuthenticator(env.Store, chaveDeTeste(t))
 	const usuario, senha = "vodm_lista", "senha-de-lista-de-teste"
 	cred, err := env.Store.CreateStreamCredential(ctx, "Cliente 1", "", usuario,
@@ -596,5 +600,32 @@ func TestEnderecoDoConteudoSeparaDoPainel(t *testing.T) {
 		"content_base_url": "tv.exemplo.tld",
 	}); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("endereço sem esquema = %d, esperava 400", resp.StatusCode)
+	}
+}
+
+// promoverPendencias transforma toda categoria de fonte pendente numa principal.
+//
+// É o que o administrador faz uma vez, na tela de Categorias, depois de cadastrar uma
+// fonte. Nos testes de exportação isso precisa acontecer explicitamente: a sincronização
+// deixou de criar pasta sozinha, e sem uma decisão não há pasta para exportar.
+func promoverPendencias(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
+
+	pendencias, err := env.Store.ListarPendencias(ctx)
+	if err != nil {
+		t.Fatalf("ListarPendencias: %v", err)
+	}
+	for _, p := range pendencias {
+		id, err := env.Store.CriarPrincipal(ctx, p.Declarado, p.Normalizado, p.ContentType)
+		if err != nil {
+			t.Fatalf("CriarPrincipal(%q): %v", p.Declarado, err)
+		}
+		if _, err := env.Store.MapSourceCategory(ctx, p.ID, id); err != nil {
+			t.Fatalf("MapSourceCategory: %v", err)
+		}
+		if _, err := env.Store.AplicarVinculoRetroativo(ctx, p.ID, id); err != nil {
+			t.Fatalf("AplicarVinculoRetroativo: %v", err)
+		}
 	}
 }

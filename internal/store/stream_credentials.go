@@ -26,8 +26,16 @@ type StreamCredential struct {
 	LastUsedAt     *time.Time `json:"last_used_at"`
 	UseCount       int64      `json:"use_count"`
 	BytesServed    int64      `json:"bytes_served"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// BytesLimit é a cota de banda. Nulo = sem limite.
+	BytesLimit *int64 `json:"bytes_limit"`
+	// Ciclo diz se a cota renova: "nenhum" (balde único) ou "mensal".
+	Ciclo string `json:"ciclo"`
+	// BytesCiclo é o consumo do ciclo atual — é ele que a cota compara. BytesServed
+	// continua sendo o total histórico, que diz se vale renovar o contrato.
+	BytesCiclo  int64     `json:"bytes_ciclo"`
+	CicloInicio time.Time `json:"ciclo_inicio"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Ativa informa se a credencial pode ser usada agora.
@@ -38,18 +46,60 @@ func (c *StreamCredential) Ativa(agora time.Time) bool {
 	if c.ExpiresAt != nil && agora.After(*c.ExpiresAt) {
 		return false
 	}
-	return true
+	return !c.CotaEsgotada(agora)
+}
+
+// CotaEsgotada informa se o cliente já consumiu a banda contratada.
+//
+// A renovação é avaliada aqui, sem escrever nada: a checagem acontece no caminho de cada
+// requisição de vídeo, e uma escrita ali custaria latência em toda reprodução. Quem zera
+// o contador de verdade é a contabilidade, que já roda fora do caminho crítico.
+func (c *StreamCredential) CotaEsgotada(agora time.Time) bool {
+	if c.BytesLimit == nil {
+		return false
+	}
+	if c.CicloExpirou(agora) {
+		// Ciclo virou: o consumo do mês passado não conta mais.
+		return false
+	}
+	return c.BytesCiclo >= *c.BytesLimit
+}
+
+// CicloExpirou informa se o ciclo mensal já virou desde o último registro.
+func (c *StreamCredential) CicloExpirou(agora time.Time) bool {
+	if c.Ciclo != "mensal" {
+		return false
+	}
+	inicioDoMes := time.Date(agora.Year(), agora.Month(), 1, 0, 0, 0, 0, agora.Location())
+	return c.CicloInicio.Before(inicioDoMes)
+}
+
+// BytesRestantes devolve quanto ainda cabe na cota. Negativo vira zero.
+func (c *StreamCredential) BytesRestantes(agora time.Time) int64 {
+	if c.BytesLimit == nil {
+		return -1 // sem limite
+	}
+	usado := c.BytesCiclo
+	if c.CicloExpirou(agora) {
+		usado = 0
+	}
+	if restante := *c.BytesLimit - usado; restante > 0 {
+		return restante
+	}
+	return 0
 }
 
 const streamCredentialColumns = `id, name, description, username, password_hmac, password_enc, key_version,
 	enabled, revoked_at, expires_at, max_connections, allowed_cidrs,
-	last_used_at, use_count, bytes_served, created_at, updated_at`
+	last_used_at, use_count, bytes_served, bytes_limit, ciclo, bytes_ciclo, ciclo_inicio,
+	created_at, updated_at`
 
 func scanStreamCredential(row rowScanner) (*StreamCredential, error) {
 	var c StreamCredential
 	if err := row.Scan(&c.ID, &c.Name, &c.Description, &c.Username, &c.PasswordHMAC,
 		&c.PasswordEnc, &c.KeyVersion, &c.Enabled, &c.RevokedAt, &c.ExpiresAt, &c.MaxConnections,
 		&c.AllowedCIDRs, &c.LastUsedAt, &c.UseCount, &c.BytesServed,
+		&c.BytesLimit, &c.Ciclo, &c.BytesCiclo, &c.CicloInicio,
 		&c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -127,6 +177,13 @@ type StreamCredentialPatch struct {
 	Enabled        *bool
 	MaxConnections **int
 	AllowedCIDRs   *[]string
+	// BytesLimit duplamente apontado: nulo = não mexer, apontando para nulo = remover a
+	// cota. Sem essa distinção não haveria como voltar uma credencial para ilimitada.
+	BytesLimit **int64
+	Ciclo      *string
+	// ZerarCiclo recomeça a contagem sem esperar a virada do mês. É o que o administrador
+	// faz quando o cliente paga um pacote extra no meio do período.
+	ZerarCiclo bool
 }
 
 // UpdateStreamCredential aplica um patch parcial.
@@ -137,6 +194,12 @@ func (s *Store) UpdateStreamCredential(ctx context.Context, id int64, p StreamCr
 		maxConns = *p.MaxConnections
 	}
 
+	var cota *int64
+	cotaSet := p.BytesLimit != nil
+	if cotaSet {
+		cota = *p.BytesLimit
+	}
+
 	row := s.pool.QueryRow(ctx, `
 		UPDATE stream_credentials SET
 			name            = coalesce($2::text, name),
@@ -144,10 +207,17 @@ func (s *Store) UpdateStreamCredential(ctx context.Context, id int64, p StreamCr
 			enabled         = coalesce($4::boolean, enabled),
 			max_connections = CASE WHEN $5::boolean THEN $6::int ELSE max_connections END,
 			allowed_cidrs   = coalesce($7::text[], allowed_cidrs),
+			bytes_limit     = CASE WHEN $8::boolean THEN $9::bigint ELSE bytes_limit END,
+			ciclo           = coalesce($10::text, ciclo),
+			-- Zerar recomeça a contagem AGORA, sem esperar a virada do mês: é o caminho
+			-- de "o cliente pagou um pacote extra no meio do período".
+			bytes_ciclo     = CASE WHEN $11::boolean THEN 0 ELSE bytes_ciclo END,
+			ciclo_inicio    = CASE WHEN $11::boolean THEN now() ELSE ciclo_inicio END,
 			updated_at      = now()
 		WHERE id = $1
 		RETURNING `+streamCredentialColumns,
-		id, p.Name, p.Description, p.Enabled, maxSet, maxConns, p.AllowedCIDRs)
+		id, p.Name, p.Description, p.Enabled, maxSet, maxConns, p.AllowedCIDRs,
+		cotaSet, cota, p.Ciclo, p.ZerarCiclo)
 	c, err := scanStreamCredential(row)
 	return c, wrapErr("atualizando credencial", err)
 }
@@ -181,10 +251,27 @@ func (s *Store) DeleteStreamCredential(ctx context.Context, id int64) error {
 
 // TouchStreamCredential registra o uso. Escrita em lote pelo chamador; nunca no caminho
 // dos bytes.
+// TouchStreamCredential registra o uso. Escrita em lote pelo chamador; nunca no caminho
+// dos bytes.
+//
+// É aqui que o ciclo mensal vira de fato. A verificação da cota, no caminho crítico, só
+// COMPARA datas; quem zera o contador é esta escrita, que já acontece fora dele.
 func (s *Store) TouchStreamCredential(ctx context.Context, id int64, usos int, bytes int64) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE stream_credentials
-		SET last_used_at = now(), use_count = use_count + $2, bytes_served = bytes_served + $3
+		UPDATE stream_credentials SET
+			last_used_at = now(),
+			use_count    = use_count + $2,
+			bytes_served = bytes_served + $3,
+			bytes_ciclo = CASE
+				WHEN ciclo = 'mensal' AND ciclo_inicio < date_trunc('month', now())
+				THEN $3
+				ELSE bytes_ciclo + $3
+			END,
+			ciclo_inicio = CASE
+				WHEN ciclo = 'mensal' AND ciclo_inicio < date_trunc('month', now())
+				THEN date_trunc('month', now())
+				ELSE ciclo_inicio
+			END
 		WHERE id = $1`, id, usos, bytes)
 	return wrapErr("registrando uso da credencial", err)
 }
