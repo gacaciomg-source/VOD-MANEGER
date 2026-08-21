@@ -97,8 +97,9 @@ SCPFAKE
 consulta="${*: -1}"
 echo "SQL-LOCAL $consulta" >> "$REGISTRO"
 case "$consulta" in
-    *count*) echo "${CONTAGEM_LOCAL-7}" ;;
-    *max*)   echo "${MAIOR_ID_LOCAL-99}" ;;
+    *count*)             echo "${CONTAGEM_LOCAL-7}" ;;
+    *max*)               echo "${MAIOR_ID_LOCAL-99}" ;;
+    *public_base_url*)   echo "${BASE_PUBLICA_LOCAL-}" ;;
 esac
 exit 0
 PSQLFAKE
@@ -114,7 +115,7 @@ PSQLFAKE
 desmontar_cenario() {
     rm -rf "$CENARIO"
     unset DESTINO_JA_TEM SAUDE_REMOTA CONTAGEM_REMOTA MAIOR_ID_REMOTO
-    unset CONTAGEM_LOCAL MAIOR_ID_LOCAL
+    unset CONTAGEM_LOCAL MAIOR_ID_LOCAL BASE_PUBLICA_LOCAL
 }
 
 rodar() {
@@ -170,6 +171,38 @@ systemctl_local=$(grep -c 'BINARIO.*systemctl' "$REGISTRO" || true)
 ls "$VODM_PASTA_BACKUP"/migracao-*.tar.gz >/dev/null 2>&1 \
     && ok "o backup da origem fica guardado aqui" \
     || falha "o backup não foi guardado na origem"
+desmontar_cenario
+
+# ---------------------------------------------------------------------------
+# O nginx e o certificado são arquivos da máquina, não do banco: não viajam no backup.
+# Uma instalação que atende por domínio e migra sem saber disso cai no instante em que o
+# DNS apontar para o destino — endereço certo, máquina sem nginx.
+echo
+echo "migrar.sh — a instalação atende por domínio"
+montar_cenario
+export BASE_PUBLICA_LOCAL="https://vod.exemplo.com"
+codigo=$(rodar)
+[ "$codigo" = "0" ] && ok "termina com sucesso" || falha "esperava código 0, obtive $codigo"
+
+grep -q 'vod.exemplo.com' "$CENARIO/saida.txt" \
+    && ok "detecta o domínio configurado" || falha "não detectou o domínio"
+grep -q 'NÃO vieram no backup' "$CENARIO/saida.txt" \
+    && ok "avisa que nginx e certificado não migram" || falha "não avisou sobre o nginx"
+grep -q 'dominio.sh vod.exemplo.com' "$CENARIO/saida.txt" \
+    && ok "dá o comando exato para emitir o certificado" || falha "não deu o comando"
+grep -q 'aponte o DNS' "$CENARIO/saida.txt" \
+    && ok "diz que o DNS vem antes do certificado" || falha "não explicou a ordem"
+desmontar_cenario
+
+echo
+echo "migrar.sh — a base pública é um IP, não um domínio"
+montar_cenario
+export BASE_PUBLICA_LOCAL="http://179.198.97.196:8080"
+codigo=$(rodar)
+[ "$codigo" = "0" ] && ok "termina com sucesso" || falha "esperava código 0, obtive $codigo"
+grep -q 'NÃO vieram no backup' "$CENARIO/saida.txt" \
+    && falha "tratou um IP como se fosse domínio" \
+    || ok "um IP não é confundido com domínio"
 desmontar_cenario
 
 # ---------------------------------------------------------------------------

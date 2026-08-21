@@ -33,6 +33,24 @@ Isso é o que decide se você precisa mexer no XC_VM ou não:
 Se a sua meta é *não resincronizar o XC_VM*, o domínio não é um detalhe — é a peça que
 faz a migração ser invisível. Configure-o **antes** de migrar, na aba Sistema do painel.
 
+## O nginx e o certificado não viajam
+
+Eles são arquivos da **máquina** (`/etc/nginx/`, Let's Encrypt), não do banco — então o
+backup não os carrega. Se a sua instalação atende por domínio, o script detecta isso e
+avisa, porque a ordem importa:
+
+1. migre;
+2. aponte o DNS do domínio para o IP novo;
+3. espere resolver (`getent hosts seu.dominio.com`);
+4. **só então** emita o certificado no destino:
+   `sudo ./scripts/dominio.sh seu.dominio.com voce@email`.
+
+O passo 4 não pode vir antes do 2: a Let's Encrypt valida acessando o domínio, e enquanto
+ele resolver para o servidor antigo a emissão falha.
+
+Entre o passo 1 e o 4, use `http://IP-NOVO:8080`. A porta 8080 nunca é fechada,
+justamente para você nunca ficar sem entrada.
+
 ## O que o script não faz de propósito
 
 **Não desliga o servidor atual.** Enquanto você confere o destino, seus clientes continuam

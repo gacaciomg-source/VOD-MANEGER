@@ -115,6 +115,22 @@ medir() {
 CONTAGEM_AQUI=$(medir "SELECT count(*) FROM contents WHERE status <> 'deleted'")
 MAIOR_ID_AQUI=$(medir "SELECT coalesce(max(id),0) FROM contents")
 
+# O domínio configurado, se houver. O nginx e o certificado NÃO viajam no backup — eles
+# são arquivos da máquina, não do banco. Sem detectar isso aqui, uma instalação que hoje
+# atende por domínio migraria e cairia no instante em que o DNS apontasse para o destino:
+# o endereço certo, numa máquina sem nginx nenhum.
+BASE_PUBLICA=$(medir "SELECT value #>> '{}' FROM settings WHERE key = 'public_base_url'")
+DOMINIO_ATUAL=""
+if [ -n "$BASE_PUBLICA" ]; then
+    hospedeiro=${BASE_PUBLICA#*://}
+    hospedeiro=${hospedeiro%%/*}
+    hospedeiro=${hospedeiro%%:*}
+    # Um IP não é domínio: migrar não muda nada para ele além do próprio endereço.
+    if ! [[ "$hospedeiro" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [ -n "$hospedeiro" ]; then
+        DOMINIO_ATUAL="$hospedeiro"
+    fi
+fi
+
 # Medida vazia dos dois lados compararia igual e anunciaria sucesso sem ter conferido
 # nada — a pior forma de falhar, porque parece a melhor.
 [ -n "$CONTAGEM_AQUI" ] && [ -n "$MAIOR_ID_AQUI" ] || \
@@ -228,8 +244,34 @@ echo "    1. entrar no painel;"
 echo "    2. abrir um filme e testar o link de reprodução;"
 echo "    3. conferir se as fontes ainda testam com sucesso (as credenciais foram junto)."
 echo
-echo "  Sobre os links dos seus clientes:"
-echo "    Os ids são os mesmos, mas o ENDEREÇO mudou — os links atuais apontam para este"
-echo "    servidor. Aponte o seu domínio para ${IP_DESTINO} e eles seguem sozinhos; sem"
-echo "    domínio, o endereço novo precisa ser trocado onde os links foram cadastrados."
+
+if [ -n "$DOMINIO_ATUAL" ]; then
+    # O certificado só pode ser emitido DEPOIS de o DNS apontar para cá: a Let's Encrypt
+    # valida acessando o domínio, e enquanto ele resolver para o servidor antigo a emissão
+    # falha. Por isso este passo não roda sozinho — a ordem importa, e ela depende de algo
+    # que está fora desta máquina.
+    vermelho "  ATENÇÃO: esta instalação atende pelo domínio ${DOMINIO_ATUAL}."
+    echo
+    echo "    O nginx e o certificado NÃO vieram no backup — eles são arquivos da máquina,"
+    echo "    não do banco. O destino ainda não sabe responder por esse domínio."
+    echo
+    echo "    Faça nesta ordem, ou o domínio fica fora do ar:"
+    echo
+    echo "      1. aponte o DNS de ${DOMINIO_ATUAL} para ${IP_DESTINO}"
+    echo "      2. espere resolver:  getent hosts ${DOMINIO_ATUAL}"
+    echo "      3. no destino, emita o certificado:"
+    echo "           ssh ${DESTINO}"
+    echo "           cd ${PASTA_REMOTA} && sudo ./scripts/dominio.sh ${DOMINIO_ATUAL} SEU@EMAIL"
+    echo
+    echo "    Até o passo 3, use http://${IP_DESTINO}:${PORTA_APP} — a porta ${PORTA_APP}"
+    echo "    nunca é fechada, justamente para você nunca ficar sem entrada."
+    echo
+    echo "    Os links dos seus clientes que já usam o domínio ficam IDÊNTICOS: só o DNS"
+    echo "    muda de destino."
+else
+    echo "  Sobre os links dos seus clientes:"
+    echo "    Os ids são os mesmos, mas o ENDEREÇO mudou — os links atuais apontam para este"
+    echo "    servidor. Aponte o seu domínio para ${IP_DESTINO} e eles seguem sozinhos; sem"
+    echo "    domínio, o endereço novo precisa ser trocado onde os links foram cadastrados."
+fi
 echo
