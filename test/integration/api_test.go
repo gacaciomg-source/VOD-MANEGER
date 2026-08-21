@@ -912,3 +912,66 @@ func TestValidacaoDoDominio(t *testing.T) {
 		}
 	}
 }
+
+// A marcação de principal precisa VOLTAR na listagem.
+//
+// Sem esse campo, o botão gravava no banco e a tela continuava mostrando o estado antigo —
+// indistinguível, para quem usa, de um botão que não funciona.
+func TestListagemDeCategoriasDevolveMarcacaoPrincipal(t *testing.T) {
+	c, env := newAPI(t)
+	c.loginOK()
+	ctx := context.Background()
+
+	id, err := env.Store.CriarPrincipal(ctx, "Ação", "acao", "movie")
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	if _, err := env.Store.CriarPrincipal(ctx, "Comédia", "comedia", "movie"); err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	// Uma que não é principal, para provar que o campo distingue.
+	if _, err := env.Store.EnsureCategory(ctx, "Terror", "terror", "movie"); err != nil {
+		t.Fatalf("EnsureCategory: %v", err)
+	}
+
+	resp, body := c.do(http.MethodGet, "/api/v1/categories", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /categories = %d: %s", resp.StatusCode, body)
+	}
+	var lista struct {
+		Categories []struct {
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			Principal bool   `json:"principal"`
+		} `json:"categories"`
+	}
+	if err := json.Unmarshal(body, &lista); err != nil {
+		t.Fatalf("decodificando: %v", err)
+	}
+
+	porNome := map[string]bool{}
+	for _, cat := range lista.Categories {
+		porNome[cat.Name] = cat.Principal
+	}
+	if !porNome["Ação"] || !porNome["Comédia"] {
+		t.Errorf("categorias principais não voltaram marcadas: %+v", porNome)
+	}
+	if porNome["Terror"] {
+		t.Error("uma categoria comum voltou marcada como principal")
+	}
+
+	// E desmarcar precisa refletir na listagem seguinte.
+	if resp, body := c.do(http.MethodPut, fmt.Sprintf("/api/v1/categories/%d/principal", id),
+		map[string]any{"principal": false}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("desmarcando = %d: %s", resp.StatusCode, body)
+	}
+	_, body = c.do(http.MethodGet, "/api/v1/categories", nil)
+	if err := json.Unmarshal(body, &lista); err != nil {
+		t.Fatalf("decodificando: %v", err)
+	}
+	for _, cat := range lista.Categories {
+		if cat.ID == id && cat.Principal {
+			t.Error("a categoria continuou marcada depois de desmarcada")
+		}
+	}
+}

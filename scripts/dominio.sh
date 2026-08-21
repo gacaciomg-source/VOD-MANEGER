@@ -28,7 +28,7 @@ EMAIL="${2:-}"
 AMBIENTE=/etc/vodmanager.env
 SITE=/etc/nginx/sites-available/vodmanager
 LINK=/etc/nginx/sites-enabled/vodmanager
-REGISTRO=/opt/vodmanager/ultimo-dominio.log
+REGISTRO=/opt/vodmanager/runtime/ultimo-dominio.log
 
 passo()   { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()      { printf '\033[32m    %s\033[0m\n' "$*"; }
@@ -39,7 +39,7 @@ erro()    { printf '\n\033[31merro: %s\033[0m\n' "$*" >&2; }
 # falha no mkdir com "permission denied", que não diz o que fazer.
 [ "$(id -u)" -eq 0 ] || { erro "rode com sudo."; exit 1; }
 
-mkdir -p /opt/vodmanager
+mkdir -p /opt/vodmanager/runtime
 exec > >(tee "$REGISTRO") 2>&1
 chown vodmanager:vodmanager "$REGISTRO" 2>/dev/null || true
 [ -n "$DOMINIO" ] || { erro "informe o domínio."; exit 2; }
@@ -64,7 +64,31 @@ if [ -z "$IP_DOMINIO" ]; then
        Crie um registro A apontando para $MEU_IP e aguarde a propagação."
     exit 1
 fi
+# atrasDeCloudflare reconhece as faixas mais comuns do proxy da Cloudflare.
+#
+# Não é uma lista completa — é o suficiente para transformar "os IPs não batem" numa
+# mensagem que diz o que fazer. Um domínio atrás do proxy resolve para a Cloudflare, nunca
+# para a máquina de origem, e é a causa mais comum desta checagem falhar.
+atrasDeCloudflare() {
+    case "$1" in
+        104.1[6-9].*|104.2[0-7].*|172.6[4-9].*|172.7[0-1].*|162.15[89].*|        188.114.9[6-9].*|188.114.1*|141.101.*|108.162.*|190.93.*|197.234.24*|        198.41.1[2-9]*|173.245.4*|131.0.7[2-5].*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ "$IP_DOMINIO" != "$MEU_IP" ]; then
+    if atrasDeCloudflare "$IP_DOMINIO"; then
+        erro "o domínio $DOMINIO está atrás do proxy da Cloudflare ($IP_DOMINIO).
+
+       No painel da Cloudflare, no registro deste subdomínio, troque o ícone LARANJA
+       por CINZA ('DNS only'). Depois espere propagar e rode de novo.
+
+       Isto não é só burocracia do certificado: com o proxy ligado, TODO o vídeo passaria
+       pela Cloudflare, e o plano gratuito deles proíbe isso — funciona por um tempo e
+       depois vem bloqueio. Para o painel administrativo o proxy é aceitável, porque o
+       tráfego é pequeno; para o conteúdo, não."
+        exit 1
+    fi
     erro "o domínio $DOMINIO aponta para $IP_DOMINIO, e esta máquina é $MEU_IP.
        O certificado não seria emitido: a autoridade certificadora precisa alcançar
        ESTA máquina pelo domínio. Corrija o registro A e tente de novo."

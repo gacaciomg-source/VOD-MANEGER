@@ -254,8 +254,17 @@ const rotas = {
 
 function irPara(hash) { location.hash = hash; }
 
-async function navegar() {
+async function navegar(opcoes) {
   if (!estado.usuario) return;
+
+  // Silencioso: redesenhar sem apagar o que já está na tela.
+  //
+  // navegar() é usada de dois jeitos bem diferentes. Quando você clica num menu, trocar
+  // tudo por "Carregando…" é o certo — a tela anterior não tem mais nada a ver com o
+  // destino. Quando é o relógio de uma tela que se atualiza sozinha (Sistema a cada 5s,
+  // Reproduções a cada 2s), é o errado: a tela apaga e volta a cada ciclo, e isso é o
+  // piscar. O conteúdo antigo fica no lugar até o novo estar pronto.
+  const silencioso = opcoes === true || (opcoes && opcoes.silencioso === true);
 
   const bruto = location.hash.replace(/^#\/?/, '') || 'painel';
   const [nome, ...resto] = bruto.split('/');
@@ -269,7 +278,7 @@ async function navegar() {
   $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
   $('.lateral').classList.remove('aberta');
 
-  $('#visao').innerHTML = '<div class="carregando">Carregando…</div>';
+  if (!silencioso) $('#visao').innerHTML = '<div class="carregando">Carregando…</div>';
   try {
     await rotas[rota].render();
   } catch (err) {
@@ -279,11 +288,46 @@ async function navegar() {
   atualizarSeloNaoResolvidos();
 }
 
-window.addEventListener('hashchange', navegar);
+window.addEventListener('hashchange', () => navegar());
 $('#botao-menu').onclick = () => $('.lateral').classList.toggle('aberta');
 $('#modal-fechar').onclick = fecharModal;
 $('#modal').onclick = e => { if (e.target.id === 'modal') fecharModal(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharModal(); });
+
+// atualizacaoAtrapalha diz se agora é um mau momento para redesenhar a tela sozinho.
+//
+// Redesenhar destrói os campos do formulário junto — e com eles o texto que estava sendo
+// digitado, a seleção e o cursor. Foi assim que o campo de domínio se esvaziava sozinho
+// enquanto era preenchido. Um modal aberto tem o mesmo problema, com o agravante de que
+// ele cobre a tela que o relógio está tentando atualizar.
+function atualizacaoAtrapalha() {
+  if (estado.ocupado) return true;
+  const modal = $('#modal');
+  if (modal && !modal.classList.contains('hidden')) return true;
+  const foco = document.activeElement;
+  if (!foco) return false;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(foco.tagName);
+}
+
+// agendarAtualizacao repete o desenho da tela enquanto ela continuar sendo a tela aberta.
+//
+// Se o momento for ruim (alguém digitando, modal aberto), o ciclo é adiado em vez de
+// cancelado: a tela volta a se atualizar sozinha assim que o campo perde o foco, sem
+// precisar de recarregar.
+const relogios = new Map();
+
+function agendarAtualizacao(rota, intervalo) {
+  clearTimeout(relogios.get(rota));
+  relogios.set(rota, setTimeout(() => {
+    relogios.delete(rota);
+    if (estado.rota !== rota) return;
+    if (atualizacaoAtrapalha()) {
+      agendarAtualizacao(rota, intervalo);
+      return;
+    }
+    navegar({ silencioso: true });
+  }, intervalo));
+}
 
 async function atualizarSeloNaoResolvidos() {
   try {
@@ -463,14 +507,10 @@ async function verFontes() {
   // Uma sincronização em curso muda os números o tempo todo; sem isso a tela mente até
   // o próximo clique.
   if (emAndamento.size > 0 && estado.rota === 'fontes') {
-    clearTimeout(temporizadorFontes);
-    temporizadorFontes = setTimeout(() => {
-      if (estado.rota === 'fontes' && !estado.ocupado) navegar();
-    }, 3000);
+    agendarAtualizacao('fontes', 3000);
   }
 }
 
-let temporizadorFontes;
 
 function linhaFonte(f, runAtiva) {
   const estados = {
@@ -1335,6 +1375,10 @@ async function verCategorias() {
       Uma categoria de fonte com nome idêntico ao de uma principal é vinculada sozinha.
       O que não casa vira <b>pendência</b> — uma decisão que você toma uma vez e vale para
       sempre, inclusive nas próximas sincronizações.
+      <br><br>
+      <b>A ordem é esta:</b> primeiro marque as principais aqui embaixo. Na sincronização
+      seguinte, as categorias de fonte com o mesmo nome se vinculam sozinhas, e só o que
+      sobrar aparece como pendência para você decidir.
     </p>
 
     ${pendencias.length ? `
@@ -1374,7 +1418,13 @@ async function verCategorias() {
         <div class="vazio" style="padding:20px">
           <span class="icone">✅</span>
           <h3>Nenhuma pendência</h3>
-          <p>Toda categoria das suas fontes já tem destino definido.</p>
+          <p>
+            ${principais.length
+              ? 'Toda categoria das suas fontes já tem destino definido.'
+              : 'As pendências aparecem depois da próxima sincronização, quando o sistema ' +
+                'lê como cada fonte nomeia suas categorias. Até lá, marque abaixo as que ' +
+                'você quer manter.'}
+          </p>
         </div>
       </div>`}
 
@@ -2035,7 +2085,6 @@ function formularioUsuario(papeis, descricao, u) {
 // Tela: Sistema (recursos da máquina)
 // ---------------------------------------------------------------------------
 
-let temporizadorSistema;
 
 async function verSistema() {
   const d = await api('/system');
@@ -2153,10 +2202,7 @@ async function verSistema() {
   await desenharAtualizacao();
 
   // Recursos mudam continuamente; a tela acompanha.
-  clearTimeout(temporizadorSistema);
-  temporizadorSistema = setTimeout(() => {
-    if (estado.rota === 'sistema' && !estado.ocupado) navegar();
-  }, 5000);
+  agendarAtualizacao('sistema', 5000);
 }
 
 // desenharDominio monta a seção de domínio e HTTPS.
@@ -2184,7 +2230,9 @@ async function desenharDominio() {
         Leva um ou dois minutos. O acesso pelo IP continua funcionando o tempo todo.
       </div>
       ${registro}`;
-    setTimeout(() => { if (estado.rota === 'sistema') desenharDominio(); }, 5000);
+    setTimeout(() => {
+      if (estado.rota === 'sistema' && !atualizacaoAtrapalha()) desenharDominio();
+    }, 5000);
     return;
   }
 
@@ -2557,7 +2605,6 @@ async function verConfiguracoes() {
 // Tela: Reproduções em andamento
 // ---------------------------------------------------------------------------
 
-let temporizadorStreams;
 
 async function verStreams() {
   const d = await api('/streams');
@@ -2617,10 +2664,7 @@ async function verStreams() {
   `;
 
   // Reprodução é estado que muda a cada segundo; a tela precisa acompanhar.
-  clearTimeout(temporizadorStreams);
-  temporizadorStreams = setTimeout(() => {
-    if (estado.rota === 'streams' && !estado.ocupado) navegar();
-  }, 2000);
+  agendarAtualizacao('streams', 2000);
 }
 
 function etiquetaEntrega(resultado) {

@@ -21,10 +21,10 @@ import (
 // derrubaria todo mundo de uma vez, e cada cliente só voltaria depois de receber um link
 // novo. Com os dois caminhos vivos, a migração é gradual.
 const (
-	pedidoDominio   = "/opt/vodmanager/solicitar-dominio"
+	pedidoDominio   = "/opt/vodmanager/runtime/solicitar-dominio"
 	unidadeDominio  = "vodmanager-domain.service"
 	observadorDomin = "vodmanager-domain.path"
-	registroDominio = "/opt/vodmanager/ultimo-dominio.log"
+	registroDominio = "/opt/vodmanager/runtime/ultimo-dominio.log"
 )
 
 // dominioValido é o mesmo formato que o script aceita. Validar aqui devolve um erro

@@ -54,8 +54,8 @@ passo() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 # serviço reinicia no meio, derrubando qualquer conexão que estivesse acompanhando. O
 # arquivo é o único lugar onde o relato sobrevive ao próprio reinício, e é dele que o
 # painel lê para mostrar o que aconteceu.
-REGISTRO=/opt/vodmanager/ultima-atualizacao.log
-mkdir -p /opt/vodmanager
+REGISTRO=/opt/vodmanager/runtime/ultima-atualizacao.log
+mkdir -p /opt/vodmanager/runtime
 exec > >(tee "$REGISTRO") 2>&1
 chown vodmanager:vodmanager "$REGISTRO" 2>/dev/null || true
 
@@ -119,7 +119,7 @@ fi
 passo "4/5  Trocar e reiniciar"
 
 systemctl stop "$SERVICO" || true
-install -o vodmanager -g vodmanager -m 0755 "$NOVO" "$DESTINO"
+install -o root -g root -m 0755 "$NOVO" "$DESTINO"
 systemctl start "$SERVICO"
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ printf '\n\033[31mA versão nova não respondeu em 30s.\033[0m\n'
 if [ -n "$ANTERIOR" ]; then
     echo "Voltando para a versão anterior..."
     systemctl stop "$SERVICO" || true
-    install -o vodmanager -g vodmanager -m 0755 "$ANTERIOR" "$DESTINO"
+    install -o root -g root -m 0755 "$ANTERIOR" "$DESTINO"
     systemctl start "$SERVICO"
     echo "Voltou. O serviço está com a versão de antes."
 fi

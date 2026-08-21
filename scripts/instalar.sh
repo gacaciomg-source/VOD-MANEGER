@@ -96,7 +96,7 @@ passo "4/9  Usuário do sistema"
 
 id -u vodmanager >/dev/null 2>&1 || \
     useradd --system --home /opt/vodmanager --shell /usr/sbin/nologin vodmanager
-mkdir -p /opt/vodmanager
+mkdir -p /opt/vodmanager/runtime
 verde "    vodmanager (sem shell, sem login)"
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ echo "    compilando (a primeira vez demora alguns minutos)..."
 cd "$FONTE"
 VERSAO=$(git describe --tags --always 2>/dev/null || echo "instalado")
 go build -trimpath -ldflags "-s -w -X main.version=$VERSAO" -o /tmp/vodmanager-novo ./cmd/vodmanager
-install -o vodmanager -g vodmanager -m 0755 /tmp/vodmanager-novo "$DESTINO"
+install -o root -g root -m 0755 /tmp/vodmanager-novo "$DESTINO"
 rm -f /tmp/vodmanager-novo
 verde "    versão $("$DESTINO" version)"
 
@@ -197,7 +197,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/vodmanager
+ReadWritePaths=/opt/vodmanager/runtime
 
 # Streaming abre muitos descritores ao mesmo tempo; sem isto o serviço trava com
 # "Too many open files" justamente quando houver audiência.
@@ -233,7 +233,7 @@ Description=Atualização do VOD Manager (disparada pelo painel)
 Type=oneshot
 # O pedido é consumido ANTES de começar: se o script falhar, o arquivo já não existe e a
 # atualização não fica repetindo em laço.
-ExecStartPre=/bin/rm -f /opt/vodmanager/solicitar-atualizacao
+ExecStartPre=/bin/rm -f /opt/vodmanager/runtime/solicitar-atualizacao
 ExecStart=${FONTE}/scripts/atualizar.sh
 UNIT
 
@@ -242,7 +242,7 @@ cat > /etc/systemd/system/vodmanager-update.path <<UNIT
 Description=Observa o pedido de atualização vindo do painel
 
 [Path]
-PathExists=/opt/vodmanager/solicitar-atualizacao
+PathExists=/opt/vodmanager/runtime/solicitar-atualizacao
 
 [Install]
 WantedBy=multi-user.target
@@ -258,7 +258,7 @@ Description=Configuração de domínio do VOD Manager (disparada pelo painel)
 Type=oneshot
 # O pedido carrega o domínio e o e-mail, e é consumido ANTES de começar: se o script
 # falhar, o arquivo já não existe e a tarefa não fica repetindo em laço.
-ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/solicitar-dominio; rm -f /opt/vodmanager/solicitar-dominio; ${FONTE}/scripts/dominio.sh "\$d" "\$e"'
+ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/runtime/solicitar-dominio; rm -f /opt/vodmanager/runtime/solicitar-dominio; ${FONTE}/scripts/dominio.sh "\$d" "\$e"'
 UNIT
 
 cat > /etc/systemd/system/vodmanager-domain.path <<UNIT
@@ -266,7 +266,7 @@ cat > /etc/systemd/system/vodmanager-domain.path <<UNIT
 Description=Observa o pedido de domínio vindo do painel
 
 [Path]
-PathExists=/opt/vodmanager/solicitar-dominio
+PathExists=/opt/vodmanager/runtime/solicitar-dominio
 
 [Install]
 WantedBy=multi-user.target

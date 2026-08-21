@@ -28,10 +28,10 @@ import (
 // O processo nunca ganha privilégio nenhum, e não escolhe o que será executado: só pede que
 // a atualização aconteça. O que roda foi definido pelo root na instalação.
 const (
-	pedidoAtualizacao     = "/opt/vodmanager/solicitar-atualizacao"
+	pedidoAtualizacao     = "/opt/vodmanager/runtime/solicitar-atualizacao"
 	unidadeAtualizacao    = "vodmanager-update.service"
 	observadorAtualizacao = "vodmanager-update.path"
-	registroAtualizacao   = "/opt/vodmanager/ultima-atualizacao.log"
+	registroAtualizacao   = "/opt/vodmanager/runtime/ultima-atualizacao.log"
 	// maxRegistro limita o que devolvemos: o registro cresce a cada atualização, e não
 	// faz sentido mandar tudo para preencher uma caixa de texto.
 	maxRegistro = 16 << 10

@@ -281,12 +281,12 @@ func (s *Store) UpsertSourceCategory(ctx context.Context, sourceID int64, extern
 // ListCategories devolve as categorias canônicas com a contagem de conteúdos.
 func (s *Store) ListCategories(ctx context.Context) ([]CategoryWithCount, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT c.id, c.name, c.normalized_name, c.content_type,
+		SELECT c.id, c.name, c.normalized_name, c.content_type, c.principal,
 		       count(ct.id) FILTER (WHERE ct.status <> 'deleted')
 		FROM categories c
 		LEFT JOIN contents ct ON ct.category_id = c.id
 		GROUP BY c.id
-		ORDER BY c.content_type, c.name`)
+		ORDER BY c.principal DESC, c.content_type, c.name`)
 	if err != nil {
 		return nil, wrapErr("listando categorias", err)
 	}
@@ -295,7 +295,8 @@ func (s *Store) ListCategories(ctx context.Context) ([]CategoryWithCount, error)
 	out := []CategoryWithCount{}
 	for rows.Next() {
 		var c CategoryWithCount
-		if err := rows.Scan(&c.ID, &c.Name, &c.NormalizedName, &c.ContentType, &c.ContentCount); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.NormalizedName, &c.ContentType,
+			&c.Principal, &c.ContentCount); err != nil {
 			return nil, wrapErr("listando categorias", err)
 		}
 		out = append(out, c)
@@ -485,6 +486,10 @@ type CategoryWithCount struct {
 	NormalizedName string `json:"normalized_name"`
 	ContentType    string `json:"content_type"`
 	ContentCount   int64  `json:"content_count"`
+	// Principal diz se esta é uma das pastas que o administrador escolheu manter. Sem
+	// este campo na listagem, o painel não tem como saber que a marcação foi aplicada —
+	// o botão gravaria no banco e a tela continuaria mostrando o estado antigo.
+	Principal bool `json:"principal"`
 }
 
 // --- Itens não resolvidos ----------------------------------------------------
