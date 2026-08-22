@@ -2223,6 +2223,11 @@ async function verSistema() {
     </div>
 
     <div class="cartao">
+      <h2>Migrar para outra máquina</h2>
+      <div id="area-migracao"><span class="discreto">Verificando…</span></div>
+    </div>
+
+    <div class="cartao">
       <h2>Como escolher o tamanho da VPS</h2>
       <p class="discreto" style="margin:-8px 0 0">
         <b>A banda é o que satura primeiro</b>, não o processador. Hoje a entrega é direta
@@ -2248,6 +2253,7 @@ async function verSistema() {
   await desenharDominio();
   await desenharTrafego();
   await desenharAtualizacao();
+  await desenharMigracao();
 
   // Recursos mudam continuamente; a tela acompanha.
   agendarAtualizacao('sistema', 5000);
@@ -2425,7 +2431,9 @@ async function desenharAtualizacao() {
   area.innerHTML = `
     <p class="discreto" style="margin:-8px 0 12px">
       Versão instalada: <span class="mono">${esc(u.versao_atual)}</span>.
-      Atualizar baixa a versão nova do repositório, compila e reinicia o serviço.
+      Este botão faz <b>tudo o que o instalador faz</b>: busca a versão nova no GitHub,
+      instala o que ela passou a precisar do sistema, compila, reaplica as configurações do
+      serviço e reinicia. Não é preciso abrir terminal nem rodar o instalador de novo.
     </p>
     ${u.disponivel ? `
       <p class="dica" style="margin:0 0 10px">
@@ -2459,6 +2467,157 @@ async function desenharAtualizacao() {
       aviso('Falha: ' + err.message, 'erro');
       botao.disabled = false;
       botao.textContent = 'Atualizar agora';
+    }
+  });
+}
+
+// desenharMigracao monta a seção de migração para outra máquina.
+//
+// A tela precisa dizer três coisas antes de qualquer campo, porque são as três que
+// costumam ser descobertas tarde demais:
+//
+//   1. o servidor atual NÃO é desligado nem apagado — migrar é copiar, não mudar de casa;
+//   2. os ids são preservados, então os links já entregues continuam apontando para o
+//      mesmo filme e o mesmo episódio;
+//   3. o nginx e o certificado não viajam. Quem atende por domínio precisa emitir o
+//      certificado no destino DEPOIS de apontar o DNS, e essa ordem não pode inverter.
+async function desenharMigracao() {
+  const area = $('#area-migracao');
+  if (!area) return;
+
+  let m;
+  try {
+    m = await api('/system/migracao');
+  } catch (err) {
+    area.innerHTML = `<div class="erro">${esc(err.message)}</div>`;
+    return;
+  }
+
+  const registro = m.registro
+    ? `<div class="secao-titulo" style="margin:14px 0 6px">Última migração</div>
+       <textarea class="mono" rows="14" readonly style="font-size:12px">${esc(m.registro)}</textarea>`
+    : '';
+
+  if (m.em_andamento) {
+    area.innerHTML = `
+      <div class="veredito alerta">
+        <b>Migração em andamento.</b>
+        Leva vários minutos: o destino instala o Postgres e o Go, compila o sistema e só
+        então recebe os dados. <b>Este servidor continua no ar o tempo todo</b> — quem está
+        assistindo não é interrompido. Esta tela acompanha sozinha.
+      </div>
+      ${registro}`;
+    setTimeout(() => {
+      if (estado.rota === 'sistema' && !atualizacaoAtrapalha()) desenharMigracao();
+    }, 5000);
+    return;
+  }
+
+  const avisoDominio = m.usa_dominio ? `
+    <div class="veredito alerta" style="margin:0 0 12px">
+      <b>Esta instalação atende pelo domínio ${esc(m.dominio_atual)}.</b>
+      O nginx e o certificado são arquivos desta máquina, não do banco — eles não vão junto.
+      Depois que a migração terminar, faça <b>nesta ordem</b>: aponte o DNS para o IP novo,
+      espere resolver, e só então configure o domínio no painel do destino. Emitir o
+      certificado antes do DNS apontar sempre falha, porque a validação acessa o domínio.
+    </div>` : `
+    <p class="dica" style="margin:0 0 12px">
+      Esta instalação atende por IP. Os ids do catálogo são preservados, mas o
+      <b>endereço</b> dentro dos links muda — eles apontam para este servidor. Se a sua meta
+      é não mexer no XC_VM, configure um domínio <b>antes</b> de migrar: aí basta apontar o
+      DNS depois e nenhum link precisa ser trocado.
+    </p>`;
+
+  area.innerHTML = `
+    <p class="discreto" style="margin:-8px 0 12px">
+      Leva para a máquina nova o catálogo inteiro <b>com os mesmos ids</b>, a chave de
+      criptografia, os usuários do painel, as fontes, as credenciais de saída, o consumo já
+      contado e as decisões que você tomou.
+      <b>Nada aqui é desligado ou apagado</b> — os seus clientes continuam assistindo neste
+      servidor enquanto você confere o outro.
+    </p>
+    ${avisoDominio}
+    ${m.disponivel ? `
+      <label>IP da máquina de destino
+        <input id="mig-destino" placeholder="203.0.113.10" autocomplete="off">
+      </label>
+      <div class="linha-campos">
+        <label>Usuário do SSH
+          <input id="mig-usuario" value="root" autocomplete="off">
+        </label>
+        <label>Porta do SSH
+          <input id="mig-porta-ssh" value="22" inputmode="numeric" autocomplete="off">
+        </label>
+        <label>Porta do painel lá
+          <input id="mig-porta-app" value="8080" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+      <label>Senha do SSH do destino
+        <input type="password" id="mig-senha" autocomplete="new-password">
+      </label>
+      <p class="dica">
+        É a senha de root que o provedor da VPS nova mandou. Ela é usada uma vez, para esta
+        migração, e <b>não é guardada em lugar nenhum</b> — nem no banco, nem em
+        configuração. Se preferir não digitá-la aqui, o mesmo trabalho é feito pelo
+        terminal: <span class="mono">sudo ./scripts/migrar.sh --destino root@IP</span>
+      </p>
+      <div class="erro" id="mig-erro" hidden></div>
+      <div class="grupo-botoes" style="justify-content:flex-start">
+        <button class="btn btn-perigo" id="mig-aplicar">Migrar para esta máquina</button>
+      </div>`
+    : `<div class="erro">${esc(m.motivo)}</div>`}
+    ${registro}`;
+
+  const botao = $('#mig-aplicar');
+  if (!botao) return;
+
+  botao.onclick = () => comAcao(async () => {
+    const erro = $('#mig-erro');
+    erro.hidden = true;
+    const destino = $('#mig-destino').value.trim();
+    const senha = $('#mig-senha').value;
+    if (!destino) {
+      erro.textContent = 'Informe o IP da máquina de destino.';
+      erro.hidden = false;
+      return;
+    }
+    if (!senha) {
+      erro.textContent = 'Informe a senha de SSH do destino.';
+      erro.hidden = false;
+      return;
+    }
+
+    const ok = await confirmar('Migrar para outra máquina',
+      `Tudo o que está neste servidor será copiado para ${destino}. ` +
+      'Se já houver uma instalação lá, os dados dela são SUBSTITUÍDOS pelos daqui. ' +
+      'Este servidor não é alterado: continua no ar, com os dados intactos.',
+      'Migrar agora');
+    if (!ok) return;
+
+    botao.disabled = true;
+    botao.textContent = 'Iniciando…';
+    try {
+      const r = await api('/system/migracao', {
+        method: 'POST',
+        corpo: {
+          destino,
+          senha,
+          usuario:   $('#mig-usuario').value.trim() || 'root',
+          porta_ssh: Number($('#mig-porta-ssh').value) || 22,
+          porta_app: Number($('#mig-porta-app').value) || 8080,
+        },
+      });
+      // A senha sai da tela no instante em que deixa de ser necessária. Deixá-la num campo
+      // é deixá-la no gerenciador de senhas do navegador, no histórico de formulário e à
+      // vista de quem passar atrás de você.
+      $('#mig-senha').value = '';
+      aviso(r.aviso, 'ok');
+      desenharMigracao();
+    } catch (err) {
+      erro.textContent = err.message;
+      erro.hidden = false;
+      botao.disabled = false;
+      botao.textContent = 'Migrar para esta máquina';
     }
   });
 }

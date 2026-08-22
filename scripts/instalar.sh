@@ -21,6 +21,52 @@ SERVICO=vodmanager
 PORTA="${VODM_PORTA:-8080}"
 VERSAO_GO=1.25.0
 
+# ---------------------------------------------------------------------------
+# A biblioteca compartilhada, e o caso em que ela não existe ao lado
+#
+# As unidades do systemd, a pasta de trabalho e o firewall vivem em lib/servicos.sh, junto
+# com o atualizador: enquanto viviam só aqui, atualizar pelo painel trocava o binário sem
+# trazer nada do que a versão nova precisasse do sistema — e a resposta era sempre "rode o
+# instalador de novo".
+#
+# Só que a forma documentada de instalar é `curl ... | sudo bash`. Aí não existe arquivo no
+# disco, muito menos uma pasta lib/ ao lado dele. Nesse caso o instalador clona o
+# repositório e reexecuta a si mesmo de lá — o que também garante que a instalação use o
+# conjunto COMPLETO de scripts, e não só o que coube num cano.
+# ---------------------------------------------------------------------------
+AQUI=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    AQUI=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+fi
+
+if [ -n "$AQUI" ] && [ -f "$AQUI/lib/servicos.sh" ]; then
+    # shellcheck source=scripts/lib/servicos.sh
+    . "$AQUI/lib/servicos.sh"
+else
+    [ "$(id -u)" -eq 0 ] || { echo "erro: rode com sudo." >&2; exit 1; }
+    echo "  baixando o instalador completo..."
+    export DEBIAN_FRONTEND=noninteractive
+    command -v git >/dev/null || { apt-get update -qq; apt-get install -y -qq git >/dev/null; }
+    if [ -d "$FONTE/.git" ]; then
+        git -C "$FONTE" fetch --quiet --all --prune
+        git -C "$FONTE" reset --quiet --hard \
+            "$(git -C "$FONTE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+    else
+        rm -rf "$FONTE"
+        git clone --quiet "$REPO" "$FONTE"
+    fi
+    [ -f "$FONTE/scripts/lib/servicos.sh" ] || {
+        echo "erro: o repositório não traz scripts/lib/servicos.sh." >&2; exit 1; }
+    # A entrada padrão é o cano do curl — e o instalador PERGUNTA a senha do painel. Sem
+    # trocar a entrada, o `read` consumiria o resto do próprio script como se fosse a senha
+    # digitada. Com terminal, ele passa a ler de você; sem terminal, lê de lugar nenhum e o
+    # instalador gera a senha sozinho, que é o comportamento correto num script.
+    if [ -e /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
+        exec /bin/bash "$FONTE/scripts/instalar.sh" "$@" </dev/tty
+    fi
+    exec /bin/bash "$FONTE/scripts/instalar.sh" "$@" </dev/null
+fi
+
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
 verde()    { printf '\033[32m%s\033[0m\n' "$*"; }
 passo()    { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -97,29 +143,13 @@ passo "4/9  Usuário do sistema"
 id -u vodmanager >/dev/null 2>&1 || \
     useradd --system --home /opt/vodmanager --shell /usr/sbin/nologin vodmanager
 
-# Pasta de trabalho do serviço, separada da pasta do binário.
-#
-# O serviço precisa ESCREVER para pedir atualização ou configuração de domínio ao systemd.
-# Deixar /opt/vodmanager inteira gravável resolveria — e daria ao processo exposto na
-# internet o poder de substituir o próprio binário. Então a escrita fica confinada aqui.
-#
-# O ReadWritePaths da unidade NÃO basta: ele levanta a proteção do systemd, não a permissão
-# do sistema de arquivos. São duas travas, e abrir só uma dá "permission denied".
-mkdir -p /opt/vodmanager/runtime
-chown vodmanager:vodmanager /opt/vodmanager/runtime
-chmod 0750 /opt/vodmanager/runtime
+vodm_pasta_runtime
 verde "    vodmanager (sem shell, sem login)"
 
 # ---------------------------------------------------------------------------
 passo "5/9  Código e compilação"
 
-if [ -d "$FONTE/.git" ]; then
-    git -C "$FONTE" fetch --quiet --all
-    git -C "$FONTE" reset --quiet --hard origin/HEAD 2>/dev/null || git -C "$FONTE" pull --quiet
-else
-    rm -rf "$FONTE"
-    git clone --quiet "$REPO" "$FONTE"
-fi
+vodm_atualizar_fonte "$FONTE" "$REPO"
 
 [ -f "$FONTE/go.mod" ] || erro "o repositório não contém o projeto (go.mod ausente em $FONTE).
        Confira se o código foi enviado ao GitHub: $REPO"
@@ -189,112 +219,20 @@ verde "    $AMBIENTE"
 # ---------------------------------------------------------------------------
 passo "7/9  Serviço"
 
-cat > /etc/systemd/system/${SERVICO}.service <<UNIT
-[Unit]
-Description=VOD Manager
-After=network-online.target postgresql.service
-Wants=network-online.target
+# As unidades vêm da biblioteca compartilhada: o instalador e o atualizador precisam
+# produzir exatamente a mesma instalação, e duas cópias do mesmo texto sempre acabam
+# divergindo na hora errada.
+vodm_unidades
 
-[Service]
-Type=simple
-User=vodmanager
-Group=vodmanager
-EnvironmentFile=${AMBIENTE}
-ExecStart=${DESTINO}
-Restart=always
-RestartSec=5
-
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/vodmanager/runtime
-
-# Streaming abre muitos descritores ao mesmo tempo; sem isto o serviço trava com
-# "Too many open files" justamente quando houver audiência.
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
 systemctl enable --quiet "$SERVICO"
 systemctl restart "$SERVICO"
 verde "    habilitado e iniciado"
-
-# Botão "Atualizar" do painel.
-#
-# O serviço roda como o usuário vodmanager, que não pode reiniciar serviços nem escrever
-# fora de /opt/vodmanager — e roda com NoNewPrivileges, que impede o sudo de elevar.
-# Ambas as restrições são boas e ficam.
-#
-# Em vez de abrir uma exceção nelas, invertemos o sentido: o painel apenas CRIA UM ARQUIVO
-# dentro da pasta onde já pode escrever, e o systemd — que é root — observa esse arquivo e
-# dispara a atualização.
-#
-# O ganho não é só conveniência. O serviço nunca ganha privilégio nenhum; ele não escolhe o
-# que será executado, só pede que a atualização aconteça. Mesmo que o processo fosse
-# comprometido, o máximo que conseguiria é disparar o script que o root já definiu.
-cat > /etc/systemd/system/vodmanager-update.service <<UNIT
-[Unit]
-Description=Atualização do VOD Manager (disparada pelo painel)
-
-[Service]
-Type=oneshot
-# O pedido é consumido ANTES de começar: se o script falhar, o arquivo já não existe e a
-# atualização não fica repetindo em laço.
-ExecStartPre=/bin/rm -f /opt/vodmanager/runtime/solicitar-atualizacao
-ExecStart=${FONTE}/scripts/atualizar.sh
-UNIT
-
-cat > /etc/systemd/system/vodmanager-update.path <<UNIT
-[Unit]
-Description=Observa o pedido de atualização vindo do painel
-
-[Path]
-PathExists=/opt/vodmanager/runtime/solicitar-atualizacao
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# Configuração de domínio pelo painel, pelo mesmo mecanismo da atualização: o painel só
-# escreve um pedido, e o systemd — que é root — executa. O serviço nunca ganha privilégio.
-cat > /etc/systemd/system/vodmanager-domain.service <<UNIT
-[Unit]
-Description=Configuração de domínio do VOD Manager (disparada pelo painel)
-
-[Service]
-Type=oneshot
-# O pedido carrega o domínio e o e-mail, e é consumido ANTES de começar: se o script
-# falhar, o arquivo já não existe e a tarefa não fica repetindo em laço.
-ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/runtime/solicitar-dominio; rm -f /opt/vodmanager/runtime/solicitar-dominio; ${FONTE}/scripts/dominio.sh "\$d" "\$e"'
-UNIT
-
-cat > /etc/systemd/system/vodmanager-domain.path <<UNIT
-[Unit]
-Description=Observa o pedido de domínio vindo do painel
-
-[Path]
-PathExists=/opt/vodmanager/runtime/solicitar-dominio
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-rm -f /etc/sudoers.d/vodmanager   # de versões anteriores deste instalador
-systemctl daemon-reload
-systemctl enable --now --quiet vodmanager-update.path
-systemctl enable --now --quiet vodmanager-domain.path
-verde "    botões Atualizar e Domínio liberados no painel"
+verde "    botões Atualizar, Domínio e Migrar liberados no painel"
 
 # ---------------------------------------------------------------------------
 passo "8/9  Firewall"
 
-ufw allow OpenSSH >/dev/null 2>&1 || true
-ufw allow "${PORTA}/tcp" >/dev/null 2>&1 || true
-ufw --force enable >/dev/null 2>&1 || true
+vodm_firewall "$PORTA"
 verde "    portas ${PORTA} e SSH liberadas"
 
 # ---------------------------------------------------------------------------

@@ -138,6 +138,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/system", s.handleSystem)
 			r.Get("/system/update", s.handleUpdateStatus)
 			r.Get("/system/dominio", s.handleDominioStatus)
+			r.Get("/system/migracao", s.handleMigracaoStatus)
 			r.Get("/falhas", s.handleFalhas)
 			r.Get("/trafego", s.handleTrafego)
 
@@ -168,6 +169,9 @@ func (s *Server) routes() chi.Router {
 					r.Use(auth.RequireRole(s.deny, store.RoleAdmin))
 					r.Post("/system/update", s.handleUpdateStart)
 					r.Post("/system/dominio", s.handleConfigurarDominio)
+					// Migrar leva o catálogo inteiro, a chave de criptografia e os
+					// usuários para outra máquina: só administrador.
+					r.Post("/system/migracao", s.handleMigrarStart)
 					r.Get("/users", s.handleListUsers)
 					r.Post("/users", s.handleCreateUser)
 					r.Patch("/users/{id}", s.handleUpdateUser)

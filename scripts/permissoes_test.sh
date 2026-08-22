@@ -39,23 +39,43 @@ proibe() {
 echo
 echo "Permissões da instalação"
 
-exige scripts/instalar.sh \
-    '^mkdir -p /opt/vodmanager/runtime' \
-    "o instalador cria a pasta de trabalho"
+exige scripts/lib/servicos.sh \
+    '^ *mkdir -p /opt/vodmanager/runtime' \
+    "a instalação cria a pasta de trabalho"
 
-exige scripts/instalar.sh \
-    '^chown vodmanager:vodmanager /opt/vodmanager/runtime' \
+exige scripts/lib/servicos.sh \
+    '^ *chown vodmanager:vodmanager /opt/vodmanager/runtime' \
     "a pasta de trabalho pertence ao serviço"
 
-exige scripts/instalar.sh \
+exige scripts/lib/servicos.sh \
     '^ReadWritePaths=/opt/vodmanager/runtime' \
     "a unidade libera escrita só na pasta de trabalho"
 
 # ReadWritePaths na pasta inteira devolveria ao processo o poder de trocar o próprio
 # binário — exatamente o que a separação em runtime/ existe para impedir.
-proibe scripts/instalar.sh \
+proibe scripts/lib/servicos.sh \
     '^ReadWritePaths=/opt/vodmanager$' \
     "a unidade NÃO libera escrita na pasta do binário"
+
+# O instalador e o atualizador têm de produzir a MESMA instalação. Enquanto as unidades
+# viviam dentro do instalador, o botão de atualizar trocava o binário e não trazia nada do
+# que a versão nova precisasse do sistema.
+exige scripts/instalar.sh '^vodm_unidades$' \
+    "o instalador usa as unidades compartilhadas"
+exige scripts/atualizar.sh '^vodm_unidades$' \
+    "o atualizador reaplica as mesmas unidades"
+
+# A unidade de atualização já rodou sem WorkingDirectory. O systemd executa a partir de /,
+# onde não há go.mod, e o botão do painel morria com "rode de dentro da pasta do código" —
+# um erro correto e inútil para quem só clicou.
+exige scripts/lib/servicos.sh \
+    '^WorkingDirectory=\$\{FONTE\}' \
+    "as unidades rodam de dentro da pasta do código"
+
+# Sem buscar a versão nova, atualizar recompila exatamente o mesmo código e anuncia
+# sucesso sem ter mudado nada — a pior forma de falhar, porque parece a melhor.
+exige scripts/atualizar.sh '^ *vodm_atualizar_fonte ' \
+    "o atualizador busca a versão nova do repositório"
 
 # O binário é do root: o serviço só precisa executá-lo.
 proibe scripts/instalar.sh \
@@ -68,7 +88,9 @@ proibe scripts/atualizar.sh \
 echo
 echo "Os pedidos e registros ficam na pasta gravável"
 
-for alvo in solicitar-atualizacao ultima-atualizacao.log solicitar-dominio ultimo-dominio.log; do
+for alvo in solicitar-atualizacao ultima-atualizacao.log \
+            solicitar-dominio    ultimo-dominio.log \
+            solicitar-migracao   ultima-migracao.log; do
     # Qualquer caminho /opt/vodmanager/<alvo> sem o runtime/ no meio é escrita numa pasta
     # que o serviço não pode tocar.
     if grep -rn "/opt/vodmanager/$alvo" "$RAIZ/internal" "$RAIZ/scripts" 2>/dev/null | grep -q .; then

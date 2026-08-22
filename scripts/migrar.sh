@@ -31,6 +31,9 @@ DESTINO=""
 PORTA_SSH=22
 PORTA_APP="${VODM_PORTA:-8080}"
 PASTA_REMOTA="/root/VOD-MANEGER"
+# SEM_PERGUNTA vale para quando a migração é disparada pelo painel: não há terminal para
+# digitar "substituir", e a confirmação já aconteceu na tela, com o aviso e um clique.
+SEM_PERGUNTA=0
 
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
 verde()    { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -52,6 +55,7 @@ while [ $# -gt 0 ]; do
         --porta-app) PORTA_APP="$2"; shift 2 ;;
         --repo)      REPO="$2"; shift 2 ;;
         --pasta)     PASTA_REMOTA="$2"; shift 2 ;;
+        --sim)       SEM_PERGUNTA=1; shift ;;
         -h|--help)   ajuda; exit 0 ;;
         *) erro "opção desconhecida: $1" ;;
     esac
@@ -74,6 +78,22 @@ CHAVE=$(grep -oP '^VODM_ENCRYPTION_KEY=\K.*' "$AMBIENTE" || echo "")
 # e uma migração vira um exercício de digitação.
 CANAL=$(mktemp -u /tmp/vodm-migrar-XXXXXX)
 SSH=(ssh -p "$PORTA_SSH" -o ControlMaster=auto -o ControlPath="$CANAL" -o ControlPersist=30m)
+SCP=(scp -P "$PORTA_SSH" -o ControlPath="$CANAL")
+
+# Senha vinda do painel.
+#
+# Quando SSHPASS está no ambiente, quem digitou a senha foi a tela de Migração e não há
+# terminal nenhum para o ssh perguntar. O sshpass responde ao prompt no lugar de uma pessoa.
+#
+# StrictHostKeyChecking=accept-new é necessário aqui e não é um relaxamento à toa: a máquina
+# de destino é nova, a chave dela nunca foi vista, e sem isto o ssh faria uma pergunta que
+# ninguém está lá para responder. É o mesmo "yes" que você digitaria no terminal.
+if [ -n "${SSHPASS:-}" ]; then
+    command -v sshpass >/dev/null || erro "sshpass não está instalado:  apt-get install -y sshpass"
+    SSH=(sshpass -e "${SSH[@]}" -o StrictHostKeyChecking=accept-new)
+    SCP=(sshpass -e "${SCP[@]}" -o StrictHostKeyChecking=accept-new)
+fi
+
 limpar() { ssh -O exit -o ControlPath="$CANAL" "$DESTINO" 2>/dev/null || true; }
 trap limpar EXIT
 
@@ -88,11 +108,15 @@ JA_TEM=$("${SSH[@]}" "$DESTINO" "test -f $AMBIENTE && echo sim || echo nao")
 if [ "$JA_TEM" = "sim" ]; then
     aviso "o destino JÁ tem uma instalação do VOD Manager."
     aviso "continuar SUBSTITUI os dados de lá pelos daqui."
-    # Sem "|| true", o set -e encerraria aqui quando a entrada acaba (um pipe, um cron)
-    # — e a migração morreria sem dizer por quê.
-    r=""
-    read -rp "    Digite 'substituir' para continuar: " r || true
-    [ "$r" = "substituir" ] || { echo "Cancelado. Nada foi alterado."; exit 1; }
+    if [ "$SEM_PERGUNTA" = "1" ]; then
+        aviso "confirmado pelo painel (--sim); seguindo."
+    else
+        # Sem "|| true", o set -e encerraria aqui quando a entrada acaba (um pipe, um cron)
+        # — e a migração morreria sem dizer por quê.
+        r=""
+        read -rp "    Digite 'substituir' para continuar: " r || true
+        [ "$r" = "substituir" ] || { echo "Cancelado. Nada foi alterado."; exit 1; }
+    fi
 fi
 verde "    destino pronto para receber"
 
@@ -169,13 +193,18 @@ verde "    chave instalada no destino"
 passo "5/8  Instalando no destino"
 
 echo "    isto leva alguns minutos (Postgres, Go, compilação)"
-"${SSH[@]}" -t "$DESTINO" "cd '$PASTA_REMOTA' && VODM_PORTA=$PORTA_APP bash scripts/instalar.sh"
+# O -t dá ao instalador remoto um terminal para escrever o progresso. Ele só faz sentido
+# quando ESTE lado tem terminal: disparada pelo painel, a migração não tem nenhum, e o ssh
+# gastaria uma linha de aviso para dizer isso.
+TTY=(-t)
+[ -t 0 ] || TTY=()
+"${SSH[@]}" "${TTY[@]}" "$DESTINO" "cd '$PASTA_REMOTA' && VODM_PORTA=$PORTA_APP bash scripts/instalar.sh"
 
 # ---------------------------------------------------------------------------
 passo "6/8  Enviando os dados"
 
 REMOTO="/root/$(basename "$ARQUIVO")"
-scp -P "$PORTA_SSH" -o ControlPath="$CANAL" "$ARQUIVO" "$DESTINO:$REMOTO" >/dev/null
+"${SCP[@]}" "$ARQUIVO" "$DESTINO:$REMOTO" >/dev/null
 verde "    $REMOTO ($TAMANHO)"
 
 # ---------------------------------------------------------------------------
