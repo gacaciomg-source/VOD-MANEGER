@@ -585,6 +585,23 @@ func (s *Server) baseURL(r *http.Request) string {
 	return esquema + "://" + r.Host
 }
 
+// lerTexto e lerBool leem uma configuração sem transformar cada leitura em três linhas de
+// tratamento de erro.
+//
+// Erro vira o padrão de propósito: uma configuração ilegível não pode derrubar a tela de
+// configurações — que é exatamente onde alguém iria para consertá-la.
+func (s *Server) lerTexto(r *http.Request, chave, padrao string) string {
+	v, err := s.deps.Store.GetSetting(r.Context(), chave, padrao)
+	if err != nil {
+		return padrao
+	}
+	return v
+}
+
+func (s *Server) lerBool(r *http.Request, chave string) bool {
+	return s.lerTexto(r, chave, "false") == "true"
+}
+
 // enderecoDaRequisicao devolve o endereço pelo qual esta requisição chegou.
 //
 // Diferente de baseURL: aquele responde "o que o sistema vai usar nos links", este responde
@@ -616,6 +633,13 @@ type configPublicaRequest struct {
 	PublicBaseURL string `json:"public_base_url"`
 	// ContentBaseURL vazio faz o conteúdo usar o mesmo endereço do painel.
 	ContentBaseURL string `json:"content_base_url"`
+
+	// As do acervo são ponteiros: a tela de endereços salva sem tocar nelas, e um valor
+	// zero ali não pode ser confundido com "desligue o cache".
+	CacheLigado           *bool   `json:"cache_ligado"`
+	CacheBackend          *string `json:"cache_backend"`
+	CacheLimiteBytes      *int64  `json:"cache_limite_bytes"`
+	CacheIdadeMinimaHoras *int    `json:"cache_idade_minima_horas"`
 }
 
 // handleGetSettings devolve as configurações editáveis pelo painel.
@@ -645,6 +669,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"content_base_url":         conteudoGuardado,
 		"content_base_url_em_uso":  conteudoEmUso,
 		"content_base_url_e_local": enderecoLocal(conteudoEmUso),
+		"cache_ligado":             s.lerBool(r, store.SettingCacheLigado),
+		"cache_backend":            s.lerTexto(r, store.SettingCacheBackend, store.BackendLocal),
+		"cache_limite_bytes":       s.lerTexto(r, store.SettingCacheLimiteBytes, "0"),
+		"cache_idade_minima_horas": s.lerTexto(r, store.SettingCacheIdadeMinimaHoras, "24"),
 		"endereco_atual":           atual,
 		// Divergente quando o endereço que entrega o conteúdo não é por onde você chegou.
 		// Nem sempre é erro — quem separa o domínio do painel do domínio do conteúdo faz
@@ -690,9 +718,73 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logEvent(r, "config", "info", "endereços alterados: painel="+valor+" conteúdo="+conteudo, actorOf(r), nil)
+
+	// As configurações do acervo só são tocadas quando vêm no corpo. A tela de endereços e
+	// a do acervo salvam pelo mesmo endpoint, e sem essa distinção uma apagaria o que a
+	// outra acabou de gravar.
+	if req.CacheLigado != nil {
+		if err := s.gravarBool(r, store.SettingCacheLigado, *req.CacheLigado); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+		estado := "desligado"
+		if *req.CacheLigado {
+			estado = "ligado"
+		}
+		// Warn, e não info: ligar o cache começa a consumir disco, e desligá-lo faz o
+		// sistema voltar a comprar banda da fonte a cada reprodução. As duas coisas
+		// aparecem na conta, e quem for procurar por que precisa achar sem cavar.
+		s.logEvent(r, "acervo", "warn", "armazenamento de mídia "+estado, actorOf(r), nil)
+	}
+	if req.CacheBackend != nil {
+		destino := strings.TrimSpace(*req.CacheBackend)
+		if destino != store.BackendLocal && destino != store.BackendNuvem {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"o destino do acervo precisa ser 'local' ou 'nuvem'", "cache_backend")
+			return
+		}
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheBackend, destino); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+	if req.CacheLimiteBytes != nil {
+		if *req.CacheLimiteBytes < 0 {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"o limite do cache não pode ser negativo", "cache_limite_bytes")
+			return
+		}
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheLimiteBytes,
+			strconv.FormatInt(*req.CacheLimiteBytes, 10)); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+	if req.CacheIdadeMinimaHoras != nil {
+		if *req.CacheIdadeMinimaHoras < 0 || *req.CacheIdadeMinimaHoras > 24*365 {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"a carência precisa estar entre 0 e 8760 horas", "cache_idade_minima_horas")
+			return
+		}
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheIdadeMinimaHoras,
+			strconv.Itoa(*req.CacheIdadeMinimaHoras)); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"ok": true, "public_base_url": valor, "content_base_url": conteudo,
 	})
+}
+
+// gravarBool grava um booleano como o texto que lerBool espera ler.
+func (s *Server) gravarBool(r *http.Request, chave string, valor bool) error {
+	texto := "false"
+	if valor {
+		texto = "true"
+	}
+	return s.deps.Store.SetSetting(r.Context(), chave, texto)
 }
 
 func (s *Server) handleListActiveStreams(w http.ResponseWriter, r *http.Request) {

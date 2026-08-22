@@ -124,3 +124,12 @@ func SourceCredentialAAD(sourceID int64) []byte {
 func StreamCredentialAAD(username string) []byte {
 	return []byte("stream_credential:" + username)
 }
+
+// NuvemAAD é o AAD canônico das credenciais de uma conta de nuvem.
+//
+// Liga o texto cifrado ao nome da conta: mover o blob de uma linha para outra no banco não
+// produz credencial válida, produz falha de decifragem. É também o motivo de o nome de uma
+// conta não poder ser alterado depois de cadastrada.
+func NuvemAAD(nome string) []byte {
+	return []byte("nuvem:" + nome)
+}

@@ -246,6 +246,7 @@ const rotas = {
   duplicatas:     { titulo: 'Duplicatas',      render: verDuplicatas },
   falhas:         { titulo: 'Falhas',          render: verFalhas },
   usuarios:       { titulo: 'Usuários',        render: verUsuarios },
+  acervo:         { titulo: 'Acervo',          render: verAcervo },
   sistema:        { titulo: 'Sistema',         render: verSistema },
   configuracoes:  { titulo: 'Configurações',   render: verConfiguracoes },
   sincronizacoes: { titulo: 'Sincronizações',  render: verSincronizacoes },
@@ -763,6 +764,9 @@ function formularioFonte(fonte) {
     name: '', description: '', kind: 'xtream', base_url: '', enabled: true,
     sync_interval_minutes: 1440, max_connections: 4, max_concurrent_downloads: 2,
     request_budget: 5000,
+    // Desligado numa fonte nova, e é escolha: guardar consome disco, e ninguém deve
+    // descobrir que a decisão foi tomada por ele ao ver a partição cheia.
+    cache_habilitado: false,
   };
 
   abrirModal(editando ? `Editar ${f.name}` : 'Nova fonte', `
@@ -799,6 +803,19 @@ function formularioFonte(fonte) {
     <label style="flex-direction:row;align-items:center;gap:8px">
       <input type="checkbox" id="f-ativa" ${f.enabled ? 'checked' : ''}> Fonte habilitada
     </label>
+    <label style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="f-cache" ${f.cache_habilitado ? 'checked' : ''}>
+      Guardar o conteúdo desta fonte no acervo
+    </label>
+    <p class="dica">
+      Quando alguém assistir, o vídeo é copiado para o acervo e as próximas reproduções
+      saem de lá — sem comprar a banda da fonte de novo.
+      <br>
+      Vale a pena nas fontes que cobram por banda ou são lentas, e não vale nas que trocam
+      de link toda semana: a cópia envelheceria mal.
+      <br>
+      <b>Exige também a chave geral</b>, em Configurações → Armazenamento de mídia.
+    </p>
     <div class="erro" id="f-erro" hidden></div>
     <div class="grupo-botoes">
       <button class="btn" data-acao="cancelar">Cancelar</button>
@@ -828,6 +845,7 @@ function formularioFonte(fonte) {
         sync_interval_minutes: Number(corpo.querySelector('#f-intervalo').value),
         max_connections: Number(corpo.querySelector('#f-conexoes').value),
         max_concurrent_downloads: Number(corpo.querySelector('#f-downloads').value),
+        cache_habilitado: corpo.querySelector('#f-cache').checked,
       };
       if (!editando) dados.kind = tipo.value;
 
@@ -2937,6 +2955,443 @@ function duracaoHumana(segundos) {
   if (h) return `${h}h ${m}min`;
   return `${m}min`;
 }
+// ---------------------------------------------------------------------------
+// Tela: Acervo
+// ---------------------------------------------------------------------------
+//
+// O acervo é o que ESTA operação guarda — em vez de puxar da fonte a cada reprodução.
+//
+// A tela separa duas coisas que parecem a mesma e não são:
+//
+//   CACHE          cópia de algo que veio de uma fonte. A fonte ainda tem o original, então
+//                  apagar custa uma releitura. A limpeza automática cuida disto sozinha.
+//
+//   ACERVO PRÓPRIO arquivo que você colocou aqui. Não existe em lugar nenhum além desta
+//                  instalação. Apagar é perda definitiva, e por isso NADA apaga sozinho —
+//                  quando faltar espaço, a decisão vem para esta tela.
+//
+// A segunda é a razão de a tela existir. Um sistema que só apagasse cache resolveria o
+// espaço sozinho e nunca precisaria perguntar nada.
+
+const estadoAcervo = { aba: 'fonte' };
+
+async function recarregarAcervo() {
+  const y = window.scrollY || document.documentElement.scrollTop || 0;
+  await verAcervo();
+  window.scrollTo(0, y);
+}
+
+async function verAcervo() {
+  const [resumo, { arquivos }] = await Promise.all([
+    api('/acervo'),
+    api('/acervo/arquivos?limit=300&origem=' + estadoAcervo.aba),
+  ]);
+
+  const porOrigem = origem => resumo.resumo
+    .filter(u => u.origem === origem)
+    .reduce((soma, u) => ({ arquivos: soma.arquivos + u.arquivos, bytes: soma.bytes + u.bytes }),
+            { arquivos: 0, bytes: 0 });
+
+  const cache = porOrigem('fonte');
+  const proprio = porOrigem('proprio');
+  const esp = resumo.espaco_local;
+
+  const aba = (valor, rotulo, conta) => `
+    <button class="aba ${estadoAcervo.aba === valor ? 'ativa' : ''}" data-aba-acervo="${valor}">
+      ${rotulo} <span class="aba-num">${num(conta.arquivos)}</span>
+    </button>`;
+
+  $('#visao').innerHTML = `
+    ${!resumo.cache_ligado ? `
+      <div class="cartao" style="margin-top:0">
+        <div class="veredito alerta" style="margin:0">
+          <b>O armazenamento está desligado.</b>
+          Nada é copiado: cada reprodução puxa da fonte, como sempre foi. O que você vê
+          abaixo continua sendo servido normalmente — desligar impede novas cópias, não
+          apaga as que existem.
+          <br><br>
+          Para ligar: <b>Configurações → Armazenamento de mídia</b>. Depois marque, em cada
+          fonte, quais podem ser copiadas — as duas coisas precisam estar ligadas.
+        </div>
+      </div>` : ''}
+
+    <div class="secao-titulo">Espaço</div>
+    <div class="grade-metricas">
+      <div class="metrica">
+        <div class="valor">${formatarBytes(cache.bytes)}</div>
+        <div class="rotulo">Cache de fontes · ${num(cache.arquivos)} arquivo(s)</div>
+      </div>
+      <div class="metrica ${proprio.arquivos > 0 ? 'destaque' : ''}">
+        <div class="valor">${formatarBytes(proprio.bytes)}</div>
+        <div class="rotulo">Acervo próprio · ${num(proprio.arquivos)} arquivo(s)</div>
+      </div>
+      ${esp && !esp.ilimitado ? `
+        <div class="metrica">
+          <div class="valor">${formatarBytes(esp.livre)}</div>
+          <div class="rotulo">Livre no disco desta máquina</div>
+        </div>` : ''}
+    </div>
+
+    <div class="cartao">
+      <h2>Contas de nuvem</h2>
+      <div id="area-nuvens"><span class="discreto">Carregando…</span></div>
+    </div>
+
+    <div class="secao-titulo">Arquivos guardados</div>
+    <div class="abas">
+      ${aba('fonte', 'Cache de fontes', cache)}
+      ${aba('proprio', 'Acervo próprio', proprio)}
+      <input class="busca-abas" id="acervo-busca" placeholder="Filtrar por título…" autocomplete="off">
+    </div>
+
+    <p class="discreto" style="margin:0 0 10px">
+      ${estadoAcervo.aba === 'fonte' ? `
+        Cópias de conteúdo que veio das suas fontes. <b>A limpeza automática apaga estas
+        sozinha</b> quando faltar espaço, começando pelas menos usadas — a fonte ainda tem
+        o original, então o custo de apagar é uma releitura.
+        <br>
+        <b>Proteger</b> tira um arquivo dessa regra. Serve para o caso que aparece sozinho
+        com o tempo: a fonte tira o filme do ar, e a sua cópia passa a ser a única que
+        existe.`
+      : `
+        Arquivos que você colocou aqui. <b>Nada apaga estes automaticamente</b>, nem quando
+        o disco encher — eles não existem em lugar nenhum além desta instalação, e apagar é
+        perda definitiva. Quando faltar espaço, a decisão aparece aqui, não no log.`}
+    </p>
+
+    ${arquivos.length ? `
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Título</th><th>Onde está</th>
+          <th class="numero">Tamanho</th><th class="numero">Acessos</th>
+          <th>Estado</th><th style="width:1%"></th>
+        </tr></thead>
+        <tbody>${arquivos.map(a => linhaDoAcervo(a)).join('')}</tbody>
+      </table></div>`
+    : `<div class="cartao"><div class="vazio" style="padding:20px">
+        <span class="icone">📼</span>
+        <h3>Nada guardado ainda</h3>
+        <p>${estadoAcervo.aba === 'fonte'
+             ? 'As cópias aparecem aqui conforme os filmes forem assistidos, nas fontes que você marcar.'
+             : 'Os arquivos que você enviar pelo painel aparecem aqui.'}</p>
+      </div></div>`}
+  `;
+
+  ligarAcoesDoAcervo();
+  desenharNuvens(resumo);
+}
+
+// linhaDoAcervo desenha um arquivo.
+//
+// O estado vem antes das ações de propósito: um download em curso não pode oferecer
+// "apagar" com a mesma naturalidade de um arquivo pronto.
+function linhaDoAcervo(a) {
+  const onde = a.backend === 'local'
+    ? 'disco desta máquina'
+    : (a.nuvem_nome ? esc(a.nuvem_nome) : 'nuvem');
+
+  const progresso = a.bytes_totais && a.bytes_totais > 0
+    ? Math.round((a.bytes_baixados / a.bytes_totais) * 100)
+    : null;
+
+  const estados = {
+    pendente:  ['neutro', 'na fila'],
+    baixando:  ['info', progresso !== null ? `baixando ${progresso}%` : 'baixando'],
+    pronto:    ['ok', 'pronto'],
+    erro:      ['erro', 'erro'],
+    removendo: ['alerta', 'removendo'],
+  };
+  const [classe, rotulo] = estados[a.estado] || ['neutro', a.estado];
+
+  return `
+    <tr data-nome="${esc((a.titulo || '').toLowerCase())}">
+      <td>
+        <b>${esc(a.titulo || '(sem título)')}</b>
+        ${a.protegido ? '<span class="etiqueta ok" style="margin-left:6px">protegido</span>' : ''}
+        ${a.fonte_nome ? `<div class="dica">de ${esc(a.fonte_nome)}</div>` : ''}
+        ${a.erro ? `<div class="dica" style="color:var(--erro)">${esc(a.erro)}</div>` : ''}
+      </td>
+      <td class="discreto">${onde}</td>
+      <td class="numero">${formatarBytes(a.bytes)}</td>
+      <td class="numero">${num(a.acessos)}</td>
+      <td><span class="etiqueta ${classe}">${rotulo}</span></td>
+      <td><div class="grupo-botoes">
+        ${a.origem === 'fonte' ? `
+          <button class="btn btn-mini" data-proteger="${a.id}" data-valor="${a.protegido ? 'false' : 'true'}"
+                  data-titulo="${esc(a.titulo || '')}">
+            ${a.protegido ? 'Desproteger' : 'Proteger'}</button>` : ''}
+        <button class="btn btn-mini btn-perigo" data-apagar-arquivo="${a.id}"
+                data-origem="${a.origem}" data-titulo="${esc(a.titulo || '')}"
+                data-bytes="${a.bytes}">Apagar</button>
+      </div></td>
+    </tr>`;
+}
+
+// desenharNuvens monta a lista de contas.
+//
+// Mostra o que cada conta guarda ao lado do espaço dela: é a informação que falta na hora
+// de decidir se cabe mais uma cópia, e a que responde "o que eu perco se remover esta?".
+function desenharNuvens(resumo) {
+  const area = $('#area-nuvens');
+  if (!area) return;
+  const nuvens = resumo.nuvens || [];
+
+  area.innerHTML = `
+    <p class="discreto" style="margin:-8px 0 12px">
+      Você pode cadastrar <b>quantas contas quiser</b>. As cópias vão para a primeira conta
+      ativa com espaço, na ordem abaixo — previsível de propósito: espalhar o acervo por
+      todas faria perder uma conta significar perder um pedaço de tudo, em vez de perder as
+      coisas mais antigas.
+    </p>
+
+    ${nuvens.length ? `
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th class="numero">Ordem</th><th>Conta</th><th>Espaço</th>
+          <th class="numero">Guardado aqui</th><th>Estado</th><th style="width:1%"></th>
+        </tr></thead>
+        <tbody>${nuvens.map(n => {
+          const cota = (n.bytes_totais && n.bytes_usados !== null)
+            ? `${formatarBytes(n.bytes_usados)} de ${formatarBytes(n.bytes_totais)}`
+            : '<span class="discreto">ainda não medido</span>';
+          let estado = '<span class="etiqueta ok">recebendo</span>';
+          if (!n.ativa) estado = '<span class="etiqueta neutro">desativada</span>';
+          else if (n.somente_leitura) estado = '<span class="etiqueta alerta">só leitura</span>';
+          return `
+            <tr>
+              <td class="numero">${n.ordem}</td>
+              <td><b>${esc(n.nome)}</b>
+                  <div class="dica">${esc(n.provedor)}</div>
+                  ${n.ultimo_erro ? `<div class="dica" style="color:var(--erro)">${esc(n.ultimo_erro)}</div>` : ''}</td>
+              <td>${cota}</td>
+              <td class="numero">${formatarBytes(n.bytes_guardados)}
+                  <div class="dica">${num(n.arquivos)} arquivo(s)</div></td>
+              <td>${estado}</td>
+              <td><div class="grupo-botoes">
+                <button class="btn btn-mini" data-nuvem-leitura="${n.id}"
+                        data-valor="${n.somente_leitura ? 'false' : 'true'}"
+                        title="Para de receber cópias novas, sem parar de servir o que já está lá">
+                  ${n.somente_leitura ? 'Voltar a receber' : 'Parar de receber'}</button>
+                <button class="btn btn-mini" data-nuvem-ativa="${n.id}" data-valor="${n.ativa ? 'false' : 'true'}">
+                  ${n.ativa ? 'Desativar' : 'Ativar'}</button>
+                <button class="btn btn-mini btn-perigo" data-nuvem-remover="${n.id}"
+                        data-nome="${esc(n.nome)}" data-arquivos="${n.arquivos}">Remover</button>
+              </div></td>
+            </tr>`;
+        }).join('')}
+        </tbody></table></div>`
+    : `<div class="vazio" style="padding:16px">
+        <p class="discreto">Nenhuma conta cadastrada. O acervo fica no disco desta máquina.</p>
+      </div>`}
+
+    <div class="grupo-botoes" style="justify-content:flex-start;margin-top:12px">
+      <button class="btn btn-primario" id="nuvem-adicionar">Adicionar conta</button>
+    </div>`;
+
+  ligarAcoesDasNuvens();
+}
+
+// ligarAcoesDoAcervo conecta os botões da lista de arquivos.
+function ligarAcoesDoAcervo() {
+  $$('[data-aba-acervo]').forEach(b => {
+    b.onclick = () => {
+      estadoAcervo.aba = b.dataset.abaAcervo;
+      window.scrollTo(0, 0);
+      verAcervo();
+    };
+  });
+
+  const busca = $('#acervo-busca');
+  if (busca) busca.oninput = () => {
+    const termo = busca.value.trim().toLowerCase();
+    $$('tr[data-nome]').forEach(tr => {
+      tr.hidden = termo !== '' && !tr.dataset.nome.includes(termo);
+    });
+  };
+
+  $$('[data-proteger]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const ligar = b.dataset.valor === 'true';
+      try {
+        await api(`/acervo/arquivos/${b.dataset.proteger}/proteger`, {
+          method: 'PUT', corpo: { protegido: ligar },
+        });
+        aviso(ligar
+          ? `"${b.dataset.titulo}" não será mais apagado pela limpeza automática.`
+          : `"${b.dataset.titulo}" voltou a ser descartável.`, 'ok');
+        recarregarAcervo();
+      } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
+    });
+  });
+
+  // Apagar tem dois avisos diferentes, e a diferença é a coisa mais importante desta tela.
+  //
+  // Cache: a fonte ainda tem o original, então o custo é uma releitura. Acervo próprio: não
+  // existe em lugar nenhum além daqui, e não há de onde trazer de volta.
+  $$('[data-apagar-arquivo]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const proprio = b.dataset.origem === 'proprio';
+      const ok = await confirmar(
+        proprio ? 'Apagar do acervo próprio' : 'Apagar do cache',
+        proprio
+          ? `"${b.dataset.titulo}" foi enviado por você e não existe em nenhum outro lugar. ` +
+            'Apagar é definitivo: não há como trazer de volta, nem pelo backup — o backup ' +
+            'guarda o registro do arquivo, não o vídeo.'
+          : `"${b.dataset.titulo}" volta a ser puxado da fonte quando alguém assistir. ` +
+            `Libera ${formatarBytes(Number(b.dataset.bytes) || 0)}.`,
+        'Apagar');
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        await api(`/acervo/arquivos/${b.dataset.apagarArquivo}`, { method: 'DELETE' });
+        aviso('Marcado para remoção.', 'ok');
+        recarregarAcervo();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    });
+  });
+}
+
+// ligarAcoesDasNuvens conecta os botões das contas.
+function ligarAcoesDasNuvens() {
+  const ajustar = async (id, corpo, mensagem) => {
+    try {
+      await api(`/nuvens/${id}`, { method: 'PATCH', corpo });
+      aviso(mensagem, 'ok');
+      recarregarAcervo();
+    } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
+  };
+
+  $$('[data-nuvem-leitura]').forEach(b => {
+    b.onclick = () => comAcao(() => {
+      const parar = b.dataset.valor === 'true';
+      return ajustar(b.dataset.nuvemLeitura, { somente_leitura: parar },
+        parar ? 'A conta parou de receber cópias novas. O que já está lá continua sendo servido.'
+              : 'A conta voltou a receber cópias.');
+    });
+  });
+
+  $$('[data-nuvem-ativa]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const ativar = b.dataset.valor === 'true';
+      if (!ativar) {
+        const ok = await confirmar('Desativar a conta',
+          'Desativar tira a conta do ar por inteiro: o que está guardado nela PARA de ser ' +
+          'servido. Se a intenção é só não receber mais cópias, use "Parar de receber" — ' +
+          'esse mantém tudo funcionando.',
+          'Desativar');
+        if (!ok) return;
+      }
+      await ajustar(b.dataset.nuvemAtiva, { ativa: ativar },
+        ativar ? 'Conta ativada.' : 'Conta desativada.');
+    });
+  });
+
+  $$('[data-nuvem-remover]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const quantos = Number(b.dataset.arquivos) || 0;
+      if (quantos > 0) {
+        aviso(`"${b.dataset.nome}" ainda guarda ${num(quantos)} arquivo(s). ` +
+              'Apague-os na lista abaixo, ou use "Desativar" em vez de remover.', 'erro');
+        return;
+      }
+      const ok = await confirmar('Remover a conta',
+        `A conta "${b.dataset.nome}" será removida do sistema. As credenciais guardadas ` +
+        'aqui são apagadas — nada é apagado dentro da conta em si.', 'Remover');
+      if (!ok) return;
+      try {
+        await api(`/nuvens/${b.dataset.nuvemRemover}`, { method: 'DELETE' });
+        aviso('Conta removida.', 'ok');
+        recarregarAcervo();
+      } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
+    });
+  });
+
+  const adicionar = $('#nuvem-adicionar');
+  if (adicionar) adicionar.onclick = () => abrirCadastroDeNuvem();
+}
+
+// abrirCadastroDeNuvem pede os dados de uma conta nova.
+//
+// As credenciais entram uma vez e nunca voltam: não há tela que as mostre, nem mascaradas.
+// Um token de Drive lê, escreve e apaga tudo o que houver na conta — devolvê-lo "só para
+// conferir" o colocaria no histórico do navegador e no console de quem estivesse com a aba
+// aberta. Quem esquecer, cadastra outra.
+function abrirCadastroDeNuvem() {
+  abrirModal('Adicionar conta de nuvem', `
+    <label>Nome desta conta
+      <input id="nv-nome" placeholder="Drive principal" autocomplete="off">
+    </label>
+    <p class="dica">
+      É como você vai distinguir esta das outras. <b>Não pode ser alterado depois</b>: o
+      nome faz parte da proteção das credenciais guardadas.
+    </p>
+
+    <label>Pasta no Drive (opcional)
+      <input id="nv-pasta" placeholder="id da pasta" autocomplete="off">
+    </label>
+    <p class="dica">
+      O acervo fica confinado a essa pasta. Não é organização — é limite de dano: a conta
+      tem outras coisas dentro, e um erro nosso não pode alcançá-las. Em branco, usa a
+      raiz do Drive.
+    </p>
+
+    <label>Ordem de preenchimento
+      <input id="nv-ordem" value="100" inputmode="numeric" autocomplete="off">
+    </label>
+    <p class="dica">Menor recebe primeiro. Só importa quando houver mais de uma conta.</p>
+
+    <div class="secao-titulo" style="margin:6px 0 0">Credenciais</div>
+    <label>Client ID<input id="nv-cid" autocomplete="off"></label>
+    <label>Client Secret<input type="password" id="nv-csec" autocomplete="new-password"></label>
+    <label>Refresh Token<input type="password" id="nv-rt" autocomplete="new-password"></label>
+    <p class="dica">
+      Vêm do Google Cloud Console: crie um projeto, ative a <b>Google Drive API</b> e gere
+      um <b>ID do cliente OAuth</b> do tipo "App para computador". O refresh token é o que
+      sobrevive — o token de acesso vale uma hora e é renovado a partir dele.
+      <br><br>
+      <b>Não use conta de serviço.</b> Arquivos criados por ela pertencem a ela, que tem
+      cota zero — o espaço da sua conta pessoal não seria usado.
+    </p>
+
+    <div class="erro" id="nv-erro" hidden></div>
+    <div class="grupo-botoes">
+      <button class="btn" data-acao="cancelar">Cancelar</button>
+      <button class="btn btn-primario" data-acao="salvar">Adicionar conta</button>
+    </div>
+  `, corpo => {
+    corpo.querySelector('[data-acao=cancelar]').onclick = fecharModal;
+    corpo.querySelector('[data-acao=salvar]').onclick = async e => {
+      const erro = corpo.querySelector('#nv-erro');
+      erro.hidden = true;
+      e.target.disabled = true;
+      try {
+        await api('/nuvens', {
+          method: 'POST',
+          corpo: {
+            nome: corpo.querySelector('#nv-nome').value.trim(),
+            provedor: 'gdrive',
+            pasta_raiz: corpo.querySelector('#nv-pasta').value.trim(),
+            ordem: Number(corpo.querySelector('#nv-ordem').value) || 100,
+            client_id: corpo.querySelector('#nv-cid').value.trim(),
+            client_secret: corpo.querySelector('#nv-csec').value.trim(),
+            refresh_token: corpo.querySelector('#nv-rt').value.trim(),
+          },
+        });
+        fecharModal();
+        aviso('Conta adicionada.', 'ok');
+        recarregarAcervo();
+      } catch (err) {
+        erro.textContent = err.message;
+        erro.hidden = false;
+        e.target.disabled = false;
+      }
+    };
+  });
+}
+
 
 // ---------------------------------------------------------------------------
 // Tela: Configurações
@@ -3036,6 +3491,51 @@ async function verConfiguracoes() {
     </div>
 
     <div class="cartao">
+      <h2>Armazenamento de mídia</h2>
+      <p class="discreto" style="margin:-8px 0 14px">
+        Ligado, o sistema guarda uma cópia do que for assistido e passa a servir dela — sem
+        comprar a banda da fonte de novo a cada reprodução. É também o que mantém um filme
+        no ar depois de a fonte tirá-lo.
+        <br><br>
+        Esta é a <b>chave geral</b>. Ela não basta sozinha: cada fonte tem a sua, e as duas
+        precisam estar ligadas para uma cópia acontecer. A geral existe para você poder
+        parar tudo de uma vez — quando o disco encher, quando algo estiver errado — sem
+        precisar lembrar quais fontes você marcou meses atrás.
+      </p>
+
+      <label class="linha-check">
+        <input type="checkbox" id="cfg-cache" ${c.cache_ligado ? 'checked' : ''}>
+        Guardar mídia no acervo
+      </label>
+
+      <div class="linha-campos" style="margin-top:12px">
+        <label>Destino padrão
+          <select id="cfg-cache-destino">
+            <option value="local" ${c.cache_backend === 'local' ? 'selected' : ''}>Disco desta máquina</option>
+            <option value="nuvem" ${c.cache_backend === 'nuvem' ? 'selected' : ''}>Conta de nuvem</option>
+          </select>
+        </label>
+        <label>Carência antes de poder apagar (horas)
+          <input id="cfg-cache-carencia" type="number" min="0" value="${esc(c.cache_idade_minima_horas || '24')}">
+        </label>
+      </div>
+      <p class="dica">
+        A carência evita o vaivém: guardar um filme, apagá-lo dez minutos depois para caber
+        outro, e na hora seguinte fazer o inverso — gasta banda dos dois lados e não melhora
+        nada.
+        <br>
+        <b>A limpeza automática só apaga cache.</b> O que você enviar pelo painel nunca é
+        apagado sozinho, nem com o disco cheio; a decisão aparece na tela do Acervo.
+      </p>
+
+      <div class="erro" id="cfg-cache-erro" hidden></div>
+      <div class="grupo-botoes" style="justify-content:flex-start">
+        <button class="btn btn-primario" id="cfg-cache-salvar">Salvar</button>
+        <button class="btn btn-sutil" onclick="location.hash='#/acervo'">Ver o acervo</button>
+      </div>
+    </div>
+
+    <div class="cartao">
       <h2>Sua senha do painel</h2>
       <p class="discreto" style="margin:-8px 0 14px">
         Trocar a senha encerra todas as sessões, inclusive esta — você vai precisar entrar
@@ -3083,6 +3583,37 @@ async function verConfiguracoes() {
         },
       });
       aviso('Endereço salvo. Os links já usam o novo valor.', 'ok');
+      navegar();
+    } catch (err) {
+      erro.textContent = err.message;
+      erro.hidden = false;
+      e.target.disabled = false;
+    }
+  };
+
+  // As configurações do acervo salvam sozinhas, sem os endereços.
+  //
+  // Pelo mesmo endpoint, mas mandando só os campos do acervo: o servidor só toca no que
+  // vem no corpo. Sem essa separação, salvar aqui reescreveria os endereços com o que
+  // estivesse nos campos acima — inclusive vazio, se alguém tivesse limpado sem salvar.
+  $('#cfg-cache-salvar').onclick = async e => {
+    const erro = $('#cfg-cache-erro');
+    erro.hidden = true;
+    e.target.disabled = true;
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        corpo: {
+          public_base_url: c.public_base_url,
+          content_base_url: c.content_base_url || '',
+          cache_ligado: $('#cfg-cache').checked,
+          cache_backend: $('#cfg-cache-destino').value,
+          cache_idade_minima_horas: Number($('#cfg-cache-carencia').value) || 0,
+        },
+      });
+      aviso($('#cfg-cache').checked
+        ? 'Armazenamento ligado. Marque em cada fonte quais podem ser guardadas.'
+        : 'Armazenamento desligado. As cópias que já existem continuam sendo servidas.', 'ok');
       navegar();
     } catch (err) {
       erro.textContent = err.message;

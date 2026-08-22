@@ -22,27 +22,31 @@ func ValidSourceKind(kind string) bool {
 // a conter, qualquer campo de credencial — credenciais vivem em source_credentials e
 // nunca saem do servidor. Ver docs/01 §6 D7.
 type Source struct {
-	ID                     int64      `json:"id"`
-	Name                   string     `json:"name"`
-	Description            string     `json:"description"`
-	Kind                   string     `json:"kind"`
-	BaseURL                string     `json:"base_url"`
-	Priority               int        `json:"priority"`
-	Enabled                bool       `json:"enabled"`
-	Status                 string     `json:"status"`
-	SyncIntervalMinutes    int        `json:"sync_interval_minutes"`
-	MaxConnections         int        `json:"max_connections"`
-	MaxConcurrentDownloads int        `json:"max_concurrent_downloads"`
-	MaxBandwidthBPS        *int64     `json:"max_bandwidth_bps"`
-	RequestBudget          int        `json:"request_budget"`
-	MissingTolerance       int        `json:"missing_tolerance"`
-	AllowedCategories      []string   `json:"allowed_categories"`
-	IgnoredCategories      []string   `json:"ignored_categories"`
-	LastSyncAt             *time.Time `json:"last_sync_at"`
-	LastSuccessAt          *time.Time `json:"last_success_at"`
-	HasCredentials         bool       `json:"has_credentials"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	ID                     int64    `json:"id"`
+	Name                   string   `json:"name"`
+	Description            string   `json:"description"`
+	Kind                   string   `json:"kind"`
+	BaseURL                string   `json:"base_url"`
+	Priority               int      `json:"priority"`
+	Enabled                bool     `json:"enabled"`
+	Status                 string   `json:"status"`
+	SyncIntervalMinutes    int      `json:"sync_interval_minutes"`
+	MaxConnections         int      `json:"max_connections"`
+	MaxConcurrentDownloads int      `json:"max_concurrent_downloads"`
+	MaxBandwidthBPS        *int64   `json:"max_bandwidth_bps"`
+	RequestBudget          int      `json:"request_budget"`
+	MissingTolerance       int      `json:"missing_tolerance"`
+	AllowedCategories      []string `json:"allowed_categories"`
+	IgnoredCategories      []string `json:"ignored_categories"`
+	// CacheHabilitado autoriza copiar o conteudo desta fonte para o acervo. Exige
+	// tambem a chave geral ligada: fontes nao sao iguais, e a decisao de gastar disco
+	// com uma delas nao deve valer para todas.
+	CacheHabilitado bool       `json:"cache_habilitado"`
+	LastSyncAt      *time.Time `json:"last_sync_at"`
+	LastSuccessAt   *time.Time `json:"last_success_at"`
+	HasCredentials  bool       `json:"has_credentials"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // NewSource são os campos aceitos na criação.
@@ -74,6 +78,7 @@ type SourcePatch struct {
 	MaxBandwidthBPS        **int64 // ponteiro duplo: permite gravar NULL explicitamente
 	AllowedCategories      *[]string
 	IgnoredCategories      *[]string
+	CacheHabilitado        *bool
 }
 
 // A subquery de credencial devolve apenas a EXISTÊNCIA da credencial, nunca o segredo.
@@ -81,7 +86,8 @@ const sourceColumns = `
 	s.id, s.name, s.description, s.kind, s.base_url, s.priority, s.enabled, s.status,
 	s.sync_interval_minutes, s.max_connections, s.max_concurrent_downloads, s.max_bandwidth_bps,
 	s.request_budget, s.missing_tolerance,
-	s.allowed_categories, s.ignored_categories, s.last_sync_at, s.last_success_at,
+	s.allowed_categories, s.ignored_categories, s.cache_habilitado,
+	s.last_sync_at, s.last_success_at,
 	EXISTS (SELECT 1 FROM source_credentials c WHERE c.source_id = s.id) AS has_credentials,
 	s.created_at, s.updated_at`
 
@@ -161,6 +167,7 @@ func (s *Store) UpdateSource(ctx context.Context, id int64, p SourcePatch) (*Sou
 				max_bandwidth_bps        = CASE WHEN $10::boolean THEN $11::bigint ELSE max_bandwidth_bps END,
 				allowed_categories       = coalesce($12::text[], allowed_categories),
 				ignored_categories       = coalesce($13::text[], ignored_categories),
+				cache_habilitado         = coalesce($14::boolean, cache_habilitado),
 				updated_at               = now()
 			WHERE id = $1
 			RETURNING *
@@ -168,7 +175,7 @@ func (s *Store) UpdateSource(ctx context.Context, id int64, p SourcePatch) (*Sou
 		SELECT `+sourceColumns+` FROM atualizado s`,
 		id, p.Name, p.Description, p.BaseURL, p.Priority, p.Enabled,
 		p.SyncIntervalMinutes, p.MaxConnections, p.MaxConcurrentDownloads,
-		bandwidthSet, bandwidth, p.AllowedCategories, p.IgnoredCategories)
+		bandwidthSet, bandwidth, p.AllowedCategories, p.IgnoredCategories, p.CacheHabilitado)
 	src, err := scanSource(row)
 	return src, wrapErr("atualizando fonte", err)
 }
@@ -225,7 +232,7 @@ func scanSource(row rowScanner) (*Source, error) {
 		&s.Enabled, &s.Status, &s.SyncIntervalMinutes, &s.MaxConnections,
 		&s.MaxConcurrentDownloads, &s.MaxBandwidthBPS, &s.RequestBudget, &s.MissingTolerance,
 		&s.AllowedCategories,
-		&s.IgnoredCategories, &s.LastSyncAt, &s.LastSuccessAt, &s.HasCredentials,
+		&s.IgnoredCategories, &s.CacheHabilitado, &s.LastSyncAt, &s.LastSuccessAt, &s.HasCredentials,
 		&s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}

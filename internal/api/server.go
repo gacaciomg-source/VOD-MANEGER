@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/auth"
 	"vodmanager/internal/cryptobox"
 	"vodmanager/internal/edge"
@@ -47,6 +48,10 @@ type Deps struct {
 	CookieSecure  bool
 	TrustProxy    bool
 	Version       string
+	// Armazenamento reúne os backends de acervo montados. Nulo quando este processo não
+	// guarda mídia — os handlers do acervo respondem sem a parte de espaço em vez de
+	// estourar.
+	Armazenamento *armazenamento.Registro
 	// Sistema mede o consumo de recursos da máquina. Nulo desliga a tela de sistema em
 	// vez de derrubar o processo.
 	Sistema *sysinfo.Coletor
@@ -143,6 +148,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/falhas", s.handleFalhas)
 			r.Get("/trafego", s.handleTrafego)
 
+			// Acervo: o que esta operação guarda, e onde.
+			r.Get("/acervo", s.handleAcervoResumo)
+			r.Get("/acervo/arquivos", s.handleListarArquivos)
+			r.Get("/nuvens", s.handleListarNuvens)
+
 			// Streaming: links de reprodução e credenciais de saída.
 			r.Get("/contents/{id}/playback", s.handlePlaybackLinks)
 			r.Get("/episodes/{id}/playback", s.handlePlaybackLinks)
@@ -162,6 +172,20 @@ func (s *Server) routes() chi.Router {
 				r.Post("/sources/{id}/test", s.handleTestSource)
 				r.Post("/maintenance/orphan-contents/purge", s.handleOrphanPurge)
 				r.Put("/settings", s.handleUpdateSettings)
+
+				// Acervo. Proteger e apagar mexem no que os clientes assistem, e apagar
+				// acervo próprio é perda definitiva — daí exigirem papel de escrita e
+				// ficarem registrados em evento.
+				r.Put("/acervo/arquivos/{id}/proteger", s.handleProtegerArquivo)
+				r.Delete("/acervo/arquivos/{id}", s.handleApagarArquivo)
+				// As credenciais de uma conta de nuvem dão acesso total a ela: só
+				// administrador cadastra ou remove.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole(s.deny, store.RoleAdmin))
+					r.Post("/nuvens", s.handleCriarNuvem)
+					r.Patch("/nuvens/{id}", s.handleAjustarNuvem)
+					r.Delete("/nuvens/{id}", s.handleRemoverNuvem)
+				})
 				// Trocar o próprio binário e reiniciar o serviço é a ação mais destrutiva do
 				// painel: só administrador.
 				// Gestão de usuários e atualização do sistema: só administrador. Dar a alguém o

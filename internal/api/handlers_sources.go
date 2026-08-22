@@ -37,6 +37,7 @@ type updateSourceRequest struct {
 	MaxConcurrentDownloads *int      `json:"max_concurrent_downloads"`
 	AllowedCategories      *[]string `json:"allowed_categories"`
 	IgnoredCategories      *[]string `json:"ignored_categories"`
+	CacheHabilitado        *bool     `json:"cache_habilitado"`
 	// Campo ausente = não alterar; `null` explícito = remover o limite; número = definir.
 	// Por isso ele fica como RawMessage: *int64 não distingue "ausente" de "null".
 	MaxBandwidthBPS json.RawMessage `json:"max_bandwidth_bps"`
@@ -155,6 +156,7 @@ func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
 		MaxConcurrentDownloads: req.MaxConcurrentDownloads,
 		AllowedCategories:      req.AllowedCategories,
 		IgnoredCategories:      req.IgnoredCategories,
+		CacheHabilitado:        req.CacheHabilitado,
 	}
 	if bandwidthSet {
 		patch.MaxBandwidthBPS = &bandwidth

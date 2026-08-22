@@ -332,6 +332,80 @@ func (s *Store) CandidatosParaLimpeza(ctx context.Context, idadeMinima time.Dura
 	return out, wrapErr("listando candidatos à limpeza", rows.Err())
 }
 
+// ArquivoPorID busca um arquivo do acervo.
+func (s *Store) ArquivoPorID(ctx context.Context, id int64) (*ArquivoGuardado, error) {
+	a, err := lerArquivo(s.pool.QueryRow(ctx,
+		`SELECT `+colunasArquivo+` FROM arquivos_guardados WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("buscando arquivo do acervo", err)
+	}
+	return a, nil
+}
+
+// FiltroDeArquivos são os cortes que a tela do acervo oferece.
+type FiltroDeArquivos struct {
+	Origem string
+	Estado string
+	Limite int
+}
+
+// ArquivoNaTela é um arquivo guardado com o que o painel precisa mostrar junto.
+//
+// O título vem do catálogo, e não do arquivo: uma listagem de acervo sem os títulos é uma
+// lista de números, e ninguém decide o que apagar olhando ids.
+type ArquivoNaTela struct {
+	ArquivoGuardado
+	Titulo     string  `json:"titulo"`
+	NuvemNome  *string `json:"nuvem_nome"`
+	FonteNome  *string `json:"fonte_nome"`
+}
+
+// ListarArquivos devolve o acervo para a tela.
+func (s *Store) ListarArquivos(ctx context.Context, f FiltroDeArquivos) ([]ArquivoNaTela, error) {
+	if f.Limite <= 0 || f.Limite > 1000 {
+		f.Limite = 200
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+colunasArquivo+`,
+		       coalesce(
+		           CASE a.target_kind
+		               WHEN 'content' THEN (SELECT c.title FROM contents c WHERE c.id = a.target_id)
+		               WHEN 'episode' THEN (SELECT e.title FROM episodes e WHERE e.id = a.target_id)
+		           END, '') AS titulo,
+		       n.nome,
+		       (SELECT src.name FROM source_variants v
+		         JOIN sources src ON src.id = v.source_id
+		        WHERE v.id = a.variant_id)
+		FROM arquivos_guardados a
+		LEFT JOIN nuvens n ON n.id = a.nuvem_id
+		WHERE ($1 = '' OR a.origem = $1)
+		  AND ($2 = '' OR a.estado = $2)
+		ORDER BY a.criado_em DESC
+		LIMIT $3`, f.Origem, f.Estado, f.Limite)
+	if err != nil {
+		return nil, wrapErr("listando o acervo", err)
+	}
+	defer rows.Close()
+
+	out := []ArquivoNaTela{}
+	for rows.Next() {
+		var t ArquivoNaTela
+		a := &t.ArquivoGuardado
+		if err := rows.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend,
+			&a.NuvemID, &a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais,
+			&a.ContainerExt, &a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos,
+			&a.UltimoAcesso, &a.CriadoEm, &a.ConcluidoEm,
+			&t.Titulo, &t.NuvemNome, &t.FonteNome); err != nil {
+			return nil, wrapErr("listando o acervo", err)
+		}
+		out = append(out, t)
+	}
+	return out, wrapErr("listando o acervo", rows.Err())
+}
+
 // UsoDoAcervo resume o que está guardado, por backend e por origem.
 //
 // Separado por origem porque as duas respondem a perguntas diferentes: o cache responde
