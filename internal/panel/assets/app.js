@@ -2414,22 +2414,52 @@ async function verSistema() {
 // que as três do meio somem quando o aaPanel regenera a configuração do site, e o sintoma
 // (o filme abre e corta depois de alguns minutos) não sugere a causa em nada.
 function blocoAaPanel(porta) {
+  const alvo = `http://127.0.0.1:${porta || 8080}`;
   const conf =
-`location / {
-    proxy_pass http://127.0.0.1:${porta || 8080};
+`    # ================= VOD Manager — início =================
+    # Cole este bloco DENTRO do server { }, logo antes da última chave.
+    # Não apague nada do que já está no arquivo: as linhas #SSL-START,
+    # #CERT-APPLY-CHECK e #REWRITE são marcas que o aaPanel usa para se achar.
+
+    # Os proxy_* ficam aqui em cima, no nível do server: assim valem para
+    # todos os location abaixo sem precisar repetir.
     proxy_http_version 1.1;
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
-    # Sem estas três linhas o vídeo abre e corta depois de alguns minutos.
+    # Sem estas quatro linhas o vídeo abre e corta depois de alguns minutos:
+    # o nginx tenta acumular a resposta antes de repassar, e a resposta aqui
+    # é um filme inteiro.
     proxy_buffering off;
     proxy_request_buffering off;
     proxy_read_timeout 1h;
     proxy_send_timeout 1h;
     client_max_body_size 0;
-}`;
+
+    # O protocolo Xtream padronizou nomes terminados em .php. Eles NÃO são PHP
+    # — mas o "include enable-php-XX.conf" que o aaPanel põe neste arquivo
+    # captura tudo que termina em .php, e no nginx uma regra por expressão
+    # regular ganha de "location /". Sem as três linhas abaixo, o painel abre,
+    # a lista abre, e a API do Xtream responde erro de PHP.
+    #
+    # "location =" é a regra de maior prioridade do nginx: ganha até da
+    # expressão regular. Por isso isto funciona sem mexer no que o aaPanel
+    # gerencia — e continua funcionando se ele regenerar o arquivo.
+    location = /get.php        { proxy_pass ${alvo}; }
+    location = /player_api.php { proxy_pass ${alvo}; }
+    location = /xmltv.php      { proxy_pass ${alvo}; }
+
+    # O vídeo. "^~" impede que as regras de arquivo estático do aaPanel
+    # (imagens, cache de 30 dias) capturem estes caminhos.
+    location ^~ /movie/  { proxy_pass ${alvo}; }
+    location ^~ /series/ { proxy_pass ${alvo}; }
+    location ^~ /stream/ { proxy_pass ${alvo}; }
+
+    # O painel e todo o resto.
+    location / { proxy_pass ${alvo}; }
+    # ================== VOD Manager — fim ===================`;
 
   return `
     <div class="veredito alerta" style="margin:0 0 12px">
@@ -2438,21 +2468,48 @@ function blocoAaPanel(porta) {
       configura o domínio aqui é ele, não este botão.
       <br><br>
       No aaPanel: <b>Website → Add site</b> com o seu domínio e <b>PHP: Static</b>. Depois
-      <b>Website → o site → Config file</b> e cole o bloco abaixo dentro do
-      <span class="mono">server { }</span>, no lugar do <span class="mono">location /</span>
-      que existir. Por fim <b>SSL → Let's Encrypt → Apply</b>.
+      <b>Website → o site → Config file</b> e cole o bloco abaixo <b>dentro do</b>
+      <span class="mono">server { }</span> — role até o fim e cole logo <b>antes da última
+      chave</b> <span class="mono">}</span>. Por fim <b>SSL → Let's Encrypt → Apply</b>.
+      <br><br>
+      <b>Não apague nada do que já está lá.</b> As linhas
+      <span class="mono">#SSL-START</span>, <span class="mono">#CERT-APPLY-CHECK</span> e
+      <span class="mono">#REWRITE-START</span> parecem comentários, mas são as marcas que o
+      aaPanel usa para se localizar no arquivo. Apagá-las quebra a emissão do certificado.
       <br><br>
       Se houver um campo <b>Custom config</b> para o site, prefira colar lá: esse campo
       costuma sobreviver quando o aaPanel regenera o arquivo principal.
     </div>
-    <textarea class="mono" rows="16" readonly style="font-size:12px">${esc(conf)}</textarea>
+    <textarea class="mono" rows="20" readonly style="font-size:12px">${esc(conf)}</textarea>
     <div class="grupo-botoes" style="justify-content:flex-start;margin:8px 0 4px">
       <button class="btn btn-mini" data-copiar-nginx="1">Copiar o bloco</button>
     </div>
-    <p class="dica" style="margin-bottom:14px">
+    <p class="dica">
       <b>Guarde este bloco.</b> Se um dia o vídeo começar a cortar depois de alguns minutos,
       volte ao Config file e confira se as linhas continuam lá — o aaPanel pode tê-las
       apagado ao regenerar a configuração, e esse é o sintoma exato.
+    </p>
+
+    <div class="secao-titulo" style="margin:16px 0 6px">Depois de o site subir, faltam dois passos</div>
+    <p class="discreto" style="margin:0 0 8px">
+      Nenhum dos dois dá erro se for esquecido — e é justamente por isso que eles precisam
+      estar escritos aqui.
+    </p>
+    <p class="dica" style="margin:0 0 10px">
+      <b>1. Avisar o sistema de que há um proxy na frente.</b> Sem isto, todo cliente que
+      entrar pelo domínio aparece como <span class="mono">127.0.0.1</span> — que é o nginx,
+      não o espectador. O limite de telas por credencial deixa de distinguir gente, o limite
+      de tentativas de login passa a ser compartilhado por todos, e as falhas de reprodução
+      apontam sempre para a própria máquina. No terminal:
+    </p>
+    <textarea class="mono" rows="3" readonly style="font-size:12px">echo 'VODM_TRUST_PROXY=true' | sudo tee -a /etc/vodmanager.env
+sudo systemctl restart vodmanager</textarea>
+    <p class="dica" style="margin:10px 0 14px">
+      <b>2. Corrigir o endereço público</b> em Configurações, para
+      <span class="mono">https://seu.dominio</span>. É ele que vai dentro dos links de
+      reprodução e das listas M3U. Se ficar com o endereço antigo, o painel abre, o catálogo
+      aparece e <b>o vídeo não toca</b> — o sintoma mais confuso que existe, porque tudo o
+      que você olha está certo.
     </p>`;
 }
 

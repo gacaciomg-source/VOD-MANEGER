@@ -211,8 +211,22 @@ aapanel_nginx_ativo() {
     ss -ltnp 2>/dev/null | grep -qE ':80\s' && ! systemctl is-active --quiet nginx 2>/dev/null
 }
 
-if aapanel_nginx_ativo && [ "$FORCAR_AAPANEL" != "1" ]; then
-    erro "o nginx do aaPanel está no ar e já responde pela porta 80.
+# A trava é pela PRESENÇA do aaPanel, não por ele estar no ar neste instante.
+#
+# Parece exagero e não é. O aaPanel tem vigia próprio: um nginx parado agora volta sozinho
+# depois. Liberar o caminho direto porque a porta está livre neste segundo instala o nginx
+# do sistema, funciona por uns dias, e quebra quando o aaPanel ressuscitar o dele — sem
+# nada ligar o sintoma à decisão tomada dias antes.
+#
+# E numa máquina com aaPanel o caminho por ele é melhor de qualquer forma: é ele quem
+# renova o certificado, e é nele que a pessoa vai procurar o site depois.
+if aapanel_instalado && [ "$FORCAR_AAPANEL" != "1" ]; then
+    if aapanel_nginx_ativo; then
+        detalhe="o nginx dele está no ar e já responde pela porta 80"
+    else
+        detalhe="o nginx dele está parado agora, mas o aaPanel o traz de volta sozinho"
+    fi
+    erro "esta máquina tem o aaPanel — $detalhe.
 
        Este script instalaria o nginx do sistema por cima, e os dois brigariam pela mesma
        porta — o domínio não responderia, e os sites que já existem no aaPanel poderiam
@@ -227,20 +241,13 @@ if aapanel_nginx_ativo && [ "$FORCAR_AAPANEL" != "1" ]; then
           O bloco pronto para colar está na aba Sistema do painel, com botão de copiar.
           O passo a passo completo: docs/16-hospedar-pelo-aapanel.md
 
-       B) Se o aaPanel não serve nada que você use, tire o nginx dele da frente e rode
-          este script de novo:
-            sudo pkill -f /www/server/nginx
-            sudo /www/server/panel/init.d/nginx stop   # se existir
-          Depois:  sudo $0 $ENTRADA $EMAIL
+       B) Se o aaPanel não serve nada que você use, DESINSTALE o nginx dele pela loja do
+          próprio aaPanel (App Store -> Nginx -> Uninstall) e rode este script de novo.
+          Só parar o processo não basta: o aaPanel o traz de volta sozinho, e o domínio
+          cairia dias depois sem nada explicar por quê.
 
        Se você já sabe disso e quer seguir mesmo assim, use --mesmo-com-aapanel."
     exit 1
-fi
-
-if aapanel_instalado; then
-    aviso "o aaPanel está instalado nesta máquina, mas o nginx dele não está segurando a"
-    aviso "porta 80. Seguindo com o nginx do sistema."
-    aviso "Se um dia você criar um site pelo aaPanel, os dois vão brigar pela porta."
 fi
 
 if ! command -v nginx >/dev/null || ! command -v certbot >/dev/null; then

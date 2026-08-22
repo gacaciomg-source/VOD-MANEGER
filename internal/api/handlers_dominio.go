@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -45,16 +44,17 @@ func (s *Server) handleDominioStatus(w http.ResponseWriter, r *http.Request) {
 	// e dizer isso na tela, com o caminho que funciona logo abaixo, vale muito mais que
 	// deixar a pessoa clicar e receber um erro.
 	//
-	// O que impede o botão não é o aaPanel ESTAR instalado — é o nginx dele estar
-	// SEGURANDO a porta 80. Desligar o botão pela simples presença da pasta recusaria o
-	// caminho direto em máquinas onde o aaPanel veio na imagem e nunca serviu nada; uma
-	// trava que barra o que funcionaria manda a pessoa procurar um jeito pior.
-	if disponivel && aaPanelNginxAtivo() {
+	// A trava é pela PRESENÇA do aaPanel, e não por ele estar no ar neste instante: o
+	// aaPanel tem vigia próprio, e um nginx parado agora volta sozinho depois. Liberar o
+	// botão porque a porta está livre neste segundo instalaria um segundo nginx que
+	// funcionaria por uns dias e quebraria quando o aaPanel ressuscitasse o dele — sem
+	// nada ligar o sintoma à decisão tomada dias antes.
+	if disponivel && aaPanelInstalado() {
 		disponivel = false
-		motivo = "o nginx do aaPanel está no ar e já responde pela porta 80. Configurar o " +
-			"domínio por aqui instalaria um segundo nginx, e os dois brigariam pela mesma " +
-			"porta — o domínio não responderia e os sites que já existem lá poderiam cair. " +
-			"O caminho para esta máquina é criar o site pelo aaPanel, com o bloco abaixo."
+		motivo = "esta máquina tem o aaPanel, e é ele quem responde pelas portas 80 e 443. " +
+			"Configurar o domínio por aqui instalaria um segundo nginx, e os dois brigariam " +
+			"pela mesma porta. O caminho para esta máquina é criar o site pelo aaPanel — " +
+			"é ele quem renova o certificado, e é nele que você vai procurar o site depois."
 	}
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"disponivel":   disponivel,
@@ -74,15 +74,6 @@ func aaPanelInstalado() bool {
 		}
 	}
 	return false
-}
-
-// aaPanelNginxAtivo pergunta ao sistema, e não ao disco: instalado e no ar são coisas
-// diferentes, e só a segunda atrapalha.
-func aaPanelNginxAtivo() bool {
-	if !aaPanelInstalado() {
-		return false
-	}
-	return exec.Command("pgrep", "-f", "/www/server/nginx").Run() == nil
 }
 
 // portaLocal é a porta em que este processo escuta. A tela do aaPanel precisa dela para
