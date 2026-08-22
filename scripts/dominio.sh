@@ -30,8 +30,25 @@ set -euo pipefail
 # Configurado apenas `vod.seudominio.com`, digitar `seudominio.com` não abre nada — e o
 # nome curto é justamente o que se lembra às pressas, quando é preciso entrar no painel com
 # urgência.
-ENTRADA="${1:-}"
-EMAIL="${2:-}"
+ENTRADA=""
+EMAIL=""
+# FORCAR_AAPANEL segue mesmo com o nginx do aaPanel no ar. Existe para quem já entendeu o
+# risco e decidiu: uma trava sem porta de saída faz a pessoa procurar um caminho pior.
+FORCAR_AAPANEL=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mesmo-com-aapanel) FORCAR_AAPANEL=1; shift ;;
+        -h|--help)
+            echo "Uso:  sudo ./scripts/dominio.sh dominio[,outro,...] [email] [--mesmo-com-aapanel]"
+            exit 0 ;;
+        *)
+            if [ -z "$ENTRADA" ]; then ENTRADA="$1"
+            elif [ -z "$EMAIL" ]; then EMAIL="$1"
+            fi
+            shift ;;
+    esac
+done
 AMBIENTE=/etc/vodmanager.env
 SITE=/etc/nginx/sites-available/vodmanager
 LINK=/etc/nginx/sites-enabled/vodmanager
@@ -178,20 +195,52 @@ export DEBIAN_FRONTEND=noninteractive
 #
 # Pior: o site que já existia no aaPanel poderia cair no meio disso. Então paramos antes, e
 # dizemos onde está o caminho que funciona.
-if [ -d /www/server/panel ] || [ -x /www/server/nginx/sbin/nginx ]; then
-    erro "esta máquina tem o aaPanel, com um nginx próprio em /www/server/nginx.
+# O que atrapalha não é o aaPanel ESTAR instalado — é o nginx dele estar SEGURANDO a porta.
+#
+# Bloquear pela simples presença da pasta impediria o caminho direto em máquinas onde o
+# aaPanel veio junto da imagem e nunca serviu nada. Uma trava que recusa o que funcionaria é
+# tão ruim quanto não ter trava nenhuma: as duas fazem a pessoa procurar outro jeito.
+aapanel_instalado() {
+    [ -d /www/server/panel ] || [ -x /www/server/nginx/sbin/nginx ]
+}
 
-       Este script instalaria o nginx do sistema por cima, e os dois brigariam pela porta
-       80 — o domínio não responderia, e os sites que já existem no aaPanel poderiam cair.
+# aapanel_nginx_ativo pergunta ao sistema, e não ao disco.
+aapanel_nginx_ativo() {
+    pgrep -f '/www/server/nginx' >/dev/null 2>&1 && return 0
+    # Alguém segurando a 80 que não é o nginx do apt tem o mesmo efeito prático.
+    ss -ltnp 2>/dev/null | grep -qE ':80\s' && ! systemctl is-active --quiet nginx 2>/dev/null
+}
 
-       O caminho para esta máquina é configurar o domínio PELO aaPanel:
-         Website -> Add site -> (o seu domínio), PHP: Static
-         Website -> o site -> Config file: apontar para http://127.0.0.1:${PORTA}
-         Website -> o site -> SSL -> Let's Encrypt
+if aapanel_nginx_ativo && [ "$FORCAR_AAPANEL" != "1" ]; then
+    erro "o nginx do aaPanel está no ar e já responde pela porta 80.
 
-       O passo a passo, com os três ajustes que o vídeo precisa (sem eles o filme abre e
-       corta depois de alguns minutos), está em docs/16-hospedar-pelo-aapanel.md."
+       Este script instalaria o nginx do sistema por cima, e os dois brigariam pela mesma
+       porta — o domínio não responderia, e os sites que já existem no aaPanel poderiam
+       cair. Com todos os comandos tendo 'dado certo'.
+
+       Há dois caminhos, e os dois funcionam:
+
+       A) Configurar o domínio PELO aaPanel (não derruba nada do que está lá):
+            Website -> Add site -> (o seu domínio), PHP: Static
+            Website -> o site -> Config file: apontar para http://127.0.0.1:${PORTA}
+            Website -> o site -> SSL -> Let's Encrypt
+          O bloco pronto para colar está na aba Sistema do painel, com botão de copiar.
+          O passo a passo completo: docs/16-hospedar-pelo-aapanel.md
+
+       B) Se o aaPanel não serve nada que você use, tire o nginx dele da frente e rode
+          este script de novo:
+            sudo pkill -f /www/server/nginx
+            sudo /www/server/panel/init.d/nginx stop   # se existir
+          Depois:  sudo $0 $ENTRADA $EMAIL
+
+       Se você já sabe disso e quer seguir mesmo assim, use --mesmo-com-aapanel."
     exit 1
+fi
+
+if aapanel_instalado; then
+    aviso "o aaPanel está instalado nesta máquina, mas o nginx dele não está segurando a"
+    aviso "porta 80. Seguindo com o nginx do sistema."
+    aviso "Se um dia você criar um site pelo aaPanel, os dois vão brigar pela porta."
 fi
 
 if ! command -v nginx >/dev/null || ! command -v certbot >/dev/null; then

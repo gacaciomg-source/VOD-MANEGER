@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -39,35 +40,49 @@ func (s *Server) handleDominioStatus(w http.ResponseWriter, r *http.Request) {
 		motivo = "o observador de domínio não está ativo nesta máquina; " +
 			"atualize o sistema para habilitá-lo"
 	}
-	// Numa máquina com aaPanel, este botão não pode agir — e dizer isso na tela vale muito
-	// mais que deixar a pessoa clicar e receber um erro. O aaPanel traz um nginx próprio
-	// em /www/server/nginx, que já ocupa as portas 80 e 443; instalar o nginx do sistema
-	// por cima colocaria os dois para brigar, e o site que já existe lá poderia cair.
-	if disponivel && temAaPanel() {
+	// Só um programa pode responder pela porta 80 desta máquina, e é por ela que o domínio
+	// sem `:porta` chega. Se o nginx do aaPanel já a segura, este botão não tem como agir —
+	// e dizer isso na tela, com o caminho que funciona logo abaixo, vale muito mais que
+	// deixar a pessoa clicar e receber um erro.
+	//
+	// O que impede o botão não é o aaPanel ESTAR instalado — é o nginx dele estar
+	// SEGURANDO a porta 80. Desligar o botão pela simples presença da pasta recusaria o
+	// caminho direto em máquinas onde o aaPanel veio na imagem e nunca serviu nada; uma
+	// trava que barra o que funcionaria manda a pessoa procurar um jeito pior.
+	if disponivel && aaPanelNginxAtivo() {
 		disponivel = false
-		motivo = "esta máquina tem o aaPanel, que traz um nginx próprio e já ocupa as " +
-			"portas 80 e 443. Configurar o domínio por aqui instalaria um segundo nginx, " +
-			"e os dois brigariam pela mesma porta. O caminho para esta máquina é criar o " +
-			"site pelo aaPanel — veja o bloco pronto para colar logo abaixo."
+		motivo = "o nginx do aaPanel está no ar e já responde pela porta 80. Configurar o " +
+			"domínio por aqui instalaria um segundo nginx, e os dois brigariam pela mesma " +
+			"porta — o domínio não responderia e os sites que já existem lá poderiam cair. " +
+			"O caminho para esta máquina é criar o site pelo aaPanel, com o bloco abaixo."
 	}
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"disponivel":   disponivel,
 		"motivo":       motivo,
 		"em_andamento": dominioEmAndamento(),
 		"registro":     registroDe(registroDominio),
-		"aapanel":      temAaPanel(),
+		"aapanel":      aaPanelInstalado(),
 		"porta_local":  s.portaLocal(),
 	})
 }
 
-// temAaPanel reconhece a instalação do aaPanel pelos caminhos que ela sempre cria.
-func temAaPanel() bool {
+// aaPanelInstalado reconhece a instalação do aaPanel pelos caminhos que ela sempre cria.
+func aaPanelInstalado() bool {
 	for _, caminho := range []string{"/www/server/panel", "/www/server/nginx/sbin/nginx"} {
 		if _, err := os.Stat(caminho); err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+// aaPanelNginxAtivo pergunta ao sistema, e não ao disco: instalado e no ar são coisas
+// diferentes, e só a segunda atrapalha.
+func aaPanelNginxAtivo() bool {
+	if !aaPanelInstalado() {
+		return false
+	}
+	return exec.Command("pgrep", "-f", "/www/server/nginx").Run() == nil
 }
 
 // portaLocal é a porta em que este processo escuta. A tela do aaPanel precisa dela para
