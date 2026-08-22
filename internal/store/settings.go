@@ -29,6 +29,36 @@ const (
 	// Vazio faz o conteúdo usar o mesmo endereço do painel, que é o comportamento de
 	// sempre.
 	SettingContentBaseURL = "content_base_url"
+
+	// SettingCacheLigado é a chave geral do armazenamento de mídia.
+	//
+	// Existe além da marcação por fonte, e as duas precisam estar ligadas para uma cópia
+	// acontecer. Parece redundante e não é: a marcação por fonte é uma decisão tomada uma
+	// vez, e meses depois ninguém lembra quais fontes foram marcadas. A chave geral é o
+	// jeito de parar tudo — quando o disco encheu, quando a conta da nuvem estourou,
+	// quando algo está errado e não se sabe o quê — sem ter de reabrir cada fonte.
+	//
+	// Padrão desligado. Ligar o cache é uma decisão sobre custo de disco, e ninguém deve
+	// descobrir que ela foi tomada por ele ao ver a partição cheia.
+	SettingCacheLigado = "cache_ligado"
+
+	// SettingCacheBackend é o destino padrão das cópias: "local" ou "gdrive".
+	SettingCacheBackend = "cache_backend"
+
+	// SettingCacheLimiteBytes limita o quanto o CACHE pode ocupar. Zero = sem limite
+	// próprio, valendo só o espaço do armazenamento.
+	//
+	// O acervo próprio não conta neste limite, e não poderia: ele não é descartável, então
+	// um limite que o incluísse ficaria estourado para sempre sem que a limpeza tivesse o
+	// que apagar.
+	SettingCacheLimiteBytes = "cache_limite_bytes"
+
+	// SettingCacheIdadeMinimaHoras é quanto tempo uma cópia fica imune à limpeza.
+	//
+	// Sem isso o cache entra em vaivém: guarda um filme, apaga dez minutos depois para
+	// caber outro, e na hora seguinte apaga o outro para rebaixar o primeiro. Gasta banda
+	// dos dois lados e não melhora nada.
+	SettingCacheIdadeMinimaHoras = "cache_idade_minima_horas"
 )
 
 // GetSetting lê uma configuração. Ausência não é erro: devolve o padrão.

@@ -49,7 +49,17 @@ exige scripts/lib/servicos.sh \
 
 exige scripts/lib/servicos.sh \
     '^ReadWritePaths=/opt/vodmanager/runtime' \
-    "a unidade libera escrita só na pasta de trabalho"
+    "a unidade libera escrita na pasta de trabalho"
+
+# O acervo guarda vídeo, e precisa das MESMAS duas travas abertas: o dono da pasta e o
+# ReadWritePaths. Com ProtectSystem=strict, o dono certo sem a unidade produz um
+# "read-only file system" em cima de uma pasta que pertence ao próprio serviço.
+exige scripts/lib/servicos.sh \
+    '^ReadWritePaths=.*/opt/vodmanager/acervo' \
+    "a unidade libera escrita na pasta do acervo"
+exige scripts/lib/servicos.sh \
+    '^ *chown vodmanager:vodmanager /opt/vodmanager/acervo' \
+    "a pasta do acervo pertence ao serviço"
 
 # ReadWritePaths na pasta inteira devolveria ao processo o poder de trocar o próprio
 # binário — exatamente o que a separação em runtime/ existe para impedir.

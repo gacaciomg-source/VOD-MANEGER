@@ -52,6 +52,22 @@ type Config struct {
 	// quando há proxy reverso na frente, para montar os links que vão para o XC_VM.
 	PublicBaseURL string
 
+	// Armazenamento de mídia
+	//
+	// Fica no ambiente, e não nas configurações do painel, porque é uma propriedade da
+	// MÁQUINA: qual disco, qual pasta, quanto reservar. Numa migração para outro servidor
+	// esses valores não devem viajar junto com os dados — o disco de lá é outro.
+	//
+	// O que é decisão de operação (ligar o cache, o destino padrão, o limite) fica nas
+	// configurações, editável pelo painel e preservado no backup.
+	ArmazenamentoLocal string
+	// ArmazenamentoReservaGB é o espaço que o cache nunca ocupa.
+	//
+	// Um disco 100% cheio não deixa o Postgres escrever, e o sintoma disso não é "o cache
+	// encheu" — é o sistema inteiro parando. A reserva é o que separa "o cache atingiu o
+	// limite", que é rotina, de "a máquina travou", que é madrugada.
+	ArmazenamentoReservaGB int
+
 	// Bootstrap do primeiro administrador
 	BootstrapAdminUsername string
 	BootstrapAdminPassword string
@@ -87,6 +103,9 @@ func LoadFrom(get Getenv) (*Config, error) {
 		LoginWindow:      l.duration("LOGIN_WINDOW", 15*time.Minute),
 		TrustProxy:       l.boolean("TRUST_PROXY", false),
 		PublicBaseURL:    l.str("PUBLIC_BASE_URL", ""),
+
+		ArmazenamentoLocal:     l.str("ARMAZENAMENTO_LOCAL", "/opt/vodmanager/acervo"),
+		ArmazenamentoReservaGB: l.intRange("ARMAZENAMENTO_RESERVA_GB", 5, 0, 100000),
 
 		BootstrapAdminUsername: l.str("BOOTSTRAP_ADMIN_USERNAME", "admin"),
 		BootstrapAdminPassword: l.str("BOOTSTRAP_ADMIN_PASSWORD", ""),

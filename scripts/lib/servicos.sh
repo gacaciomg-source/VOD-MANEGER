@@ -33,6 +33,17 @@ vodm_pasta_runtime() {
     mkdir -p /opt/vodmanager/runtime
     chown vodmanager:vodmanager /opt/vodmanager/runtime
     chmod 0750 /opt/vodmanager/runtime
+
+    # A pasta do acervo: o vídeo que esta operação guarda, seja cache de fonte ou arquivo
+    # enviado pelo administrador.
+    #
+    # Separada da pasta de trabalho porque as duas têm tamanhos de outra ordem — runtime/
+    # guarda pedidos e registros, medidos em kilobytes; acervo/ guarda filmes. Quem um dia
+    # quiser pôr o acervo em outro disco precisa poder montá-lo em cima desta pasta sem
+    # levar junto o mecanismo dos botões do painel.
+    mkdir -p /opt/vodmanager/acervo
+    chown vodmanager:vodmanager /opt/vodmanager/acervo
+    chmod 0750 /opt/vodmanager/acervo
 }
 
 # vodm_unidades escreve todas as unidades systemd e as habilita.
@@ -67,7 +78,14 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/vodmanager/runtime
+# Duas pastas graváveis, e só elas. A do binário continua fora: é o que impede o processo
+# exposto na internet de substituir o próprio executável.
+#
+# ProtectSystem=strict deixa TODO o resto somente-leitura, inclusive pastas cujo dono é o
+# usuário do serviço. Sem a linha do acervo aqui, o dono estaria certo, a permissão estaria
+# certa, e a gravação falharia com "read-only file system" — são duas travas, e abrir só a
+# do sistema de arquivos não adianta.
+ReadWritePaths=/opt/vodmanager/runtime /opt/vodmanager/acervo
 
 # Streaming abre muitos descritores ao mesmo tempo; sem isto o serviço trava com
 # "Too many open files" justamente quando houver audiência.
