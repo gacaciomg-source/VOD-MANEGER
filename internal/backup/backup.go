@@ -58,6 +58,12 @@ var tabelas = []string{
 	"seasons",
 	"episodes",
 	"source_variants",
+	// As contas de nuvem viajam, e é o que faz o acervo na nuvem sobreviver a uma troca de
+	// máquina: o Drive é o mesmo, as credenciais vão cifradas com a mesma chave mestra, e
+	// a máquina nova encontra os arquivos onde eles sempre estiveram.
+	//
+	// Antes de arquivos_guardados: a chave estrangeira exige que a conta exista primeiro.
+	"nuvens",
 	// O REGISTRO das cópias viaja; os arquivos, não.
 	//
 	// Parece contraditório salvar a ficha de um arquivo que ficou para trás, e não é: para

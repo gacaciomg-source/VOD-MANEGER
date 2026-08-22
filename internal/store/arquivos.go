@@ -33,10 +33,14 @@ const (
 	ArquivoRemovendo = "removendo"
 )
 
-// Backends de armazenamento reconhecidos.
+// Backends de armazenamento.
+//
+// São dois, e não um por provedor de nuvem: qual nuvem é dito por NuvemID, apontando para
+// uma conta cadastrada. Assim acrescentar um provedor é código novo e uma linha na tabela
+// de contas — nunca uma migração que altera um CHECK sobre milhões de linhas.
 const (
-	BackendLocal  = "local"
-	BackendGDrive = "gdrive"
+	BackendLocal = "local"
+	BackendNuvem = "nuvem"
 )
 
 // ArquivoGuardado é uma cópia de mídia sob nossa guarda.
@@ -46,6 +50,7 @@ type ArquivoGuardado struct {
 	TargetKind    string     `json:"target_kind"`
 	TargetID      int64      `json:"target_id"`
 	Backend       string     `json:"backend"`
+	NuvemID       *int64     `json:"nuvem_id"`
 	Localizador   string     `json:"-"` // nunca vai para a API: é caminho de disco ou id da nuvem
 	Bytes         int64      `json:"bytes"`
 	BytesBaixados int64      `json:"bytes_baixados"`
@@ -70,13 +75,13 @@ func (a *ArquivoGuardado) Descartavel() bool {
 	return a.Origem == OrigemFonte && !a.Protegido && a.Estado == ArquivoPronto
 }
 
-const colunasArquivo = `id, variant_id, target_kind, target_id, backend, localizador,
+const colunasArquivo = `id, variant_id, target_kind, target_id, backend, nuvem_id, localizador,
 	bytes, bytes_baixados, bytes_totais, container_ext, estado, erro, origem, protegido,
 	acessos, ultimo_acesso_em, criado_em, concluido_em`
 
 func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
 	var a ArquivoGuardado
-	err := linha.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend,
+	err := linha.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend, &a.NuvemID,
 		&a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais, &a.ContainerExt,
 		&a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos, &a.UltimoAcesso,
 		&a.CriadoEm, &a.ConcluidoEm)
@@ -109,10 +114,13 @@ func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID int64) (*
 
 // NovoArquivo é o pedido para guardar alguma coisa.
 type NovoArquivo struct {
-	VariantID    *int64
-	TargetKind   string
-	TargetID     int64
-	Backend      string
+	VariantID  *int64
+	TargetKind string
+	TargetID   int64
+	Backend    string
+	// NuvemID é obrigatório quando Backend é BackendNuvem, e proibido quando é local. O
+	// banco recusa as duas combinações erradas.
+	NuvemID      *int64
 	Origem       string
 	ContainerExt string
 	BytesTotais  *int64
@@ -143,15 +151,15 @@ func (s *Store) EnfileirarArquivo(ctx context.Context, novo NovoArquivo) (*Arqui
 	if novo.VariantID != nil {
 		a, err := lerArquivo(s.pool.QueryRow(ctx, `
 			INSERT INTO arquivos_guardados
-				(variant_id, target_kind, target_id, backend, localizador, bytes,
+				(variant_id, target_kind, target_id, backend, nuvem_id, localizador, bytes,
 				 bytes_totais, container_ext, estado, origem, protegido, concluido_em)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 			ON CONFLICT (variant_id) WHERE variant_id IS NOT NULL
 			DO UPDATE SET container_ext = excluded.container_ext
 			RETURNING `+colunasArquivo,
-			novo.VariantID, novo.TargetKind, novo.TargetID, novo.Backend, novo.Localizador,
-			novo.Bytes, novo.BytesTotais, novo.ContainerExt, estado, novo.Origem,
-			novo.Protegido, concluido))
+			novo.VariantID, novo.TargetKind, novo.TargetID, novo.Backend, novo.NuvemID,
+			novo.Localizador, novo.Bytes, novo.BytesTotais, novo.ContainerExt, estado,
+			novo.Origem, novo.Protegido, concluido))
 		if err != nil {
 			return nil, wrapErr("enfileirando arquivo", err)
 		}
@@ -162,12 +170,13 @@ func (s *Store) EnfileirarArquivo(ctx context.Context, novo NovoArquivo) (*Arqui
 	// são dois arquivos, e é o administrador quem decide se algum sobra.
 	a, err := lerArquivo(s.pool.QueryRow(ctx, `
 		INSERT INTO arquivos_guardados
-			(target_kind, target_id, backend, localizador, bytes, bytes_totais,
+			(target_kind, target_id, backend, nuvem_id, localizador, bytes, bytes_totais,
 			 container_ext, estado, origem, protegido, concluido_em)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING `+colunasArquivo,
-		novo.TargetKind, novo.TargetID, novo.Backend, novo.Localizador, novo.Bytes,
-		novo.BytesTotais, novo.ContainerExt, estado, novo.Origem, novo.Protegido, concluido))
+		novo.TargetKind, novo.TargetID, novo.Backend, novo.NuvemID, novo.Localizador,
+		novo.Bytes, novo.BytesTotais, novo.ContainerExt, estado, novo.Origem,
+		novo.Protegido, concluido))
 	if err != nil {
 		return nil, wrapErr("enfileirando arquivo", err)
 	}

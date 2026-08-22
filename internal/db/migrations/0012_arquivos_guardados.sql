@@ -1,4 +1,4 @@
--- Arquivos guardados: o acervo que fica NESTA operação, e não na fonte.
+-- Acervo: o vídeo que fica NESTA operação, e não na fonte.
 --
 -- # O que muda com isto
 --
@@ -7,8 +7,96 @@
 -- aparecem com audiência — cada byte entregue é um byte comprado da fonte, e o dia em que
 -- a fonte tira o filme do ar, ele some para todo mundo.
 --
--- Esta tabela é o registro de uma CÓPIA. A partir dela, um conteúdo pode ser servido do
--- disco local ou da nuvem em vez da fonte.
+-- Duas tabelas: onde guardar, e o que está guardado.
+
+-- ---------------------------------------------------------------------------
+-- Contas de nuvem
+-- ---------------------------------------------------------------------------
+--
+-- Uma linha por conta, cadastrada pelo painel. Não há conta embutida no código nem no
+-- ambiente.
+--
+-- # Por que várias, e não uma
+--
+-- Espaço em nuvem se compra por conta, não por terabyte: cinco contas de 5 TB custam menos
+-- que uma de 25 TB, e às vezes a de 25 nem existe. Quem cresce, cresce somando contas — e
+-- um sistema que suporta exatamente uma obriga a escolher entre migrar tudo ou parar de
+-- guardar.
+--
+-- Some-se a isso que conta de nuvem é o recurso mais frágil desta lista: ela é suspensa,
+-- ela enche, ela perde o token. Com várias, isso vira "esta parou, as outras seguem". Com
+-- uma, vira "o acervo saiu do ar".
+--
+-- # Por que `provedor` é texto, e não uma coluna por serviço
+--
+-- Hoje é o Google Drive. Amanhã pode ser outro. O que muda entre eles é como falar — e
+-- isso vive no código, numa implementação por provedor. O banco só precisa saber que
+-- existe uma conta, de que tipo ela é, e onde estão as credenciais dela.
+CREATE TABLE nuvens (
+    id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    -- O nome que o administrador deu. É como ele distingue sete contas iguais na tela —
+    -- "Drive principal", "Drive filmes antigos". O sistema nunca o interpreta.
+    nome     text        NOT NULL UNIQUE,
+    provedor text        NOT NULL CHECK (provedor IN ('gdrive')),
+
+    -- As credenciais, cifradas com a chave mestra, como as das fontes.
+    --
+    -- Um token de acesso à nuvem de alguém vale tanto quanto a senha da conta: ele lê,
+    -- escreve e apaga tudo o que houver lá. Guardá-lo em claro seria transformar um dump
+    -- de banco no roubo de cinco terabytes de acervo.
+    credenciais_enc bytea   NOT NULL,
+    key_version     integer NOT NULL DEFAULT 1,
+
+    -- A pasta dentro da conta onde o acervo vive. O formato é assunto do provedor: no
+    -- Drive é um id de pasta.
+    --
+    -- Confinar numa pasta não é organização — é limite de dano. Uma conta pessoal tem
+    -- outras coisas dentro, e um erro nosso não pode alcançá-las.
+    pasta_raiz text NOT NULL DEFAULT '',
+
+    ativa boolean NOT NULL DEFAULT true,
+    -- somente_leitura para de gravar SEM parar de servir.
+    --
+    -- É o estado de uma conta que encheu, e é o estado que evita o pior desfecho: sem ele,
+    -- a única forma de parar as gravações numa conta cheia seria desativá-la — e isso
+    -- derrubaria de uma vez todo o acervo que já está lá dentro.
+    somente_leitura boolean NOT NULL DEFAULT false,
+
+    -- A ordem de preenchimento. A primeira conta ativa com espaço recebe o próximo arquivo.
+    --
+    -- Previsível de propósito. "A que tem mais espaço" espalharia o acervo entre todas as
+    -- contas, e aí perder uma conta significaria perder um pedaço de tudo, em vez de perder
+    -- as coisas mais antigas.
+    ordem integer NOT NULL DEFAULT 100,
+
+    -- Última medição de cota, para a tela e para a decisão de onde gravar. Nulo = ainda
+    -- não medido.
+    bytes_usados  bigint,
+    bytes_totais  bigint,
+    medida_em     timestamptz,
+
+    -- O último erro que esta conta deu. Uma conta que perdeu o token falha em toda
+    -- gravação, e sem isto a única pista seria o registro do serviço.
+    ultimo_erro    text        NOT NULL DEFAULT '',
+    ultimo_erro_em timestamptz,
+
+    criado_em timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT nuvens_nome_nao_vazio CHECK (length(btrim(nome)) > 0),
+    CONSTRAINT nuvens_credenciais_nao_vazias CHECK (octet_length(credenciais_enc) > 0)
+);
+CREATE INDEX nuvens_ordem_idx ON nuvens (ordem, id) WHERE ativa;
+
+COMMENT ON TABLE nuvens IS
+    'Contas de armazenamento em nuvem cadastradas pelo painel. Várias por instalação, adicionáveis e removíveis; as credenciais são cifradas com a chave mestra.';
+
+-- ---------------------------------------------------------------------------
+-- Arquivos guardados
+-- ---------------------------------------------------------------------------
+--
+-- O registro de uma CÓPIA. A partir dela, um conteúdo pode ser servido do disco local ou de
+-- uma das contas de nuvem, em vez da fonte.
 --
 -- # As duas origens, e por que elas não podem se misturar
 --
@@ -17,7 +105,7 @@
 --            original. Se apagarmos por engano, o custo é uma releitura.
 --
 -- 'proprio'— arquivo que o administrador colocou aqui. NÃO existe em lugar nenhum além
---            desta máquina. Apagar é perda definitiva.
+--            deste acervo. Apagar é perda definitiva.
 --
 -- Um único mecanismo de limpeza tratando as duas do mesmo jeito acabaria apagando acervo
 -- próprio para liberar espaço — e ninguém perceberia até alguém tentar assistir. Por isso a
@@ -36,11 +124,20 @@ CREATE TABLE arquivos_guardados (
     target_kind text        NOT NULL CHECK (target_kind IN ('content', 'episode')),
     target_id   bigint      NOT NULL,
 
-    -- Onde o arquivo está. O nome do backend, e o endereço dele DENTRO daquele backend:
-    -- um caminho no disco, um id de arquivo no Drive. O formato do localizador é assunto
-    -- do backend, e o resto do sistema não o interpreta.
-    backend     text        NOT NULL CHECK (backend IN ('local', 'gdrive')),
-    localizador text        NOT NULL DEFAULT '',
+    -- Onde o arquivo está: no disco desta máquina, ou numa das contas de nuvem.
+    --
+    -- 'nuvem' em vez do nome do provedor, de propósito: assim acrescentar um provedor novo
+    -- é uma linha na tabela `nuvens` e uma implementação no código, e não uma migração que
+    -- altera um CHECK em cima de uma tabela com milhões de linhas.
+    backend  text   NOT NULL CHECK (backend IN ('local', 'nuvem')),
+    -- ON DELETE RESTRICT: apagar uma conta que ainda guarda arquivos deixaria linhas
+    -- apontando para lugar nenhum, e o painel entregaria o link de um vídeo que não existe
+    -- mais. Quem remove uma conta tem de decidir antes o que fazer com o que está dentro.
+    nuvem_id bigint REFERENCES nuvens(id) ON DELETE RESTRICT,
+
+    -- O endereço do arquivo DENTRO daquele backend: um nome no disco, um id no Drive. O
+    -- formato é assunto do backend, e o resto do sistema não o interpreta.
+    localizador text NOT NULL DEFAULT '',
 
     bytes          bigint   NOT NULL DEFAULT 0,
     -- bytes_baixados acompanha o progresso enquanto o estado é 'baixando'. Serve para a
@@ -83,6 +180,10 @@ CREATE TABLE arquivos_guardados (
         -- Acervo próprio não pode apontar para uma variante de fonte: seria dizer que o
         -- arquivo veio de um lugar de onde ele não veio, e a limpeza confiaria nisso.
         CHECK (origem = 'fonte' OR variant_id IS NULL),
+    CONSTRAINT arquivos_nuvem_tem_conta
+        -- Sem isto, um arquivo poderia dizer "estou na nuvem" sem dizer em qual — e não
+        -- haveria como encontrá-lo nem como saber que ele se perdeu.
+        CHECK ((backend = 'nuvem') = (nuvem_id IS NOT NULL)),
     CONSTRAINT arquivos_pronto_tem_localizador
         CHECK (estado <> 'pronto' OR localizador <> '')
 );
@@ -93,7 +194,7 @@ CREATE UNIQUE INDEX arquivos_guardados_variante_uq ON arquivos_guardados (varian
     WHERE variant_id IS NOT NULL;
 
 -- A consulta do caminho quente: "existe cópia pronta para esta variante?". Ela roda a cada
--- pedido de reprodução, antes de decidir entre servir do disco ou puxar da fonte.
+-- pedido de reprodução, antes de decidir entre servir do acervo ou puxar da fonte.
 CREATE INDEX arquivos_guardados_prontos_idx ON arquivos_guardados (variant_id)
     WHERE estado = 'pronto';
 
@@ -103,6 +204,11 @@ CREATE INDEX arquivos_guardados_alvo_idx ON arquivos_guardados (target_kind, tar
 -- A fila de trabalho do baixador.
 CREATE INDEX arquivos_guardados_fila_idx ON arquivos_guardados (criado_em)
     WHERE estado IN ('pendente', 'baixando');
+
+-- "O que esta conta guarda?" — a pergunta de quem vai remover uma conta, e a de quem quer
+-- saber quanto cada uma está ocupando.
+CREATE INDEX arquivos_guardados_nuvem_idx ON arquivos_guardados (nuvem_id)
+    WHERE nuvem_id IS NOT NULL;
 
 -- A ordem em que a limpeza escolhe o que apagar: o menos usado há mais tempo, primeiro.
 -- Só cache desprotegido entra — acervo próprio nunca é apagado sozinho.
@@ -129,4 +235,4 @@ ALTER TABLE sources
     ADD COLUMN cache_habilitado boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN sources.cache_habilitado IS
-    'Se o conteúdo desta fonte pode ser copiado para o armazenamento local ou na nuvem. Exige também a chave geral ligada.';
+    'Se o conteúdo desta fonte pode ser copiado para o acervo. Exige também a chave geral ligada.';

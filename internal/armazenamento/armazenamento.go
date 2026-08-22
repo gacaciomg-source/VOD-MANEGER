@@ -23,6 +23,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sort"
+	"strconv"
+	"sync"
 )
 
 // Erros que os chamadores distinguem.
@@ -88,18 +91,35 @@ type Espaco struct {
 	Ilimitado bool
 }
 
-// Registro reúne os backends disponíveis nesta instalação.
+// ChaveLocal identifica o disco desta máquina no registro.
+const ChaveLocal = "local"
+
+// ChaveDaNuvem identifica uma CONTA de nuvem no registro.
 //
-// Existe porque a escolha do destino é do administrador, por fonte e por arquivo, e muda
-// sem reiniciar: o código que guarda pede "o backend chamado assim" em vez de carregar um
-// deles na inicialização.
+// A chave é a conta, e não o provedor, porque há várias contas do mesmo provedor: sete
+// Drives são sete backends distintos, cada um com token, cota e pasta próprios. Chavear por
+// "gdrive" faria o segundo cadastro substituir o primeiro no registro — e os arquivos do
+// primeiro passariam a ser procurados na conta errada.
+func ChaveDaNuvem(id int64) string {
+	return "nuvem:" + strconv.FormatInt(id, 10)
+}
+
+// Registro guarda os backends já montados, por chave.
+//
+// É um cache, não uma configuração: as contas de nuvem são cadastradas e removidas pelo
+// painel a qualquer momento, e montar uma delas custa uma troca de token com o provedor.
+// Montar a cada arquivo servido seria pagar essa ida e volta em todo pedido de reprodução.
+//
+// Guardar e Remover existem porque a lista muda em execução — o registro precisa aprender a
+// conta nova sem reiniciar o serviço, e esquecer a removida sem continuar servindo dela.
 type Registro struct {
+	mu       sync.RWMutex
 	backends map[string]Backend
 }
 
-// NovoRegistro monta o registro a partir dos backends configurados.
+// NovoRegistro monta o registro com os backends já conhecidos na inicialização.
 func NovoRegistro(backends ...Backend) *Registro {
-	r := &Registro{backends: make(map[string]Backend, len(backends))}
+	r := &Registro{backends: make(map[string]Backend, len(backends)+1)}
 	for _, b := range backends {
 		if b != nil {
 			r.backends[b.Nome()] = b
@@ -108,18 +128,44 @@ func NovoRegistro(backends ...Backend) *Registro {
 	return r
 }
 
-// Obter devolve um backend pelo nome.
-func (r *Registro) Obter(nome string) (Backend, bool) {
-	b, ok := r.backends[nome]
+// Guardar registra um backend sob uma chave, substituindo o que houvesse.
+//
+// Substituir é o comportamento certo: quando o token de uma conta é renovado, o backend
+// novo tem de tomar o lugar do antigo. Recusar deixaria o registro servindo de uma conta
+// que já não autentica.
+func (r *Registro) Guardar(chave string, b Backend) {
+	if b == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.backends[chave] = b
+}
+
+// Remover esquece um backend. Usado quando a conta é removida ou desativada.
+func (r *Registro) Remover(chave string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.backends, chave)
+}
+
+// Obter devolve um backend pela chave.
+func (r *Registro) Obter(chave string) (Backend, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	b, ok := r.backends[chave]
 	return b, ok
 }
 
-// Nomes lista os backends disponíveis, para a tela oferecer o que existe — e não o que
+// Chaves lista o que está montado, para a tela mostrar o que existe de fato — e não o que
 // existiria se estivesse configurado.
-func (r *Registro) Nomes() []string {
+func (r *Registro) Chaves() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.backends))
-	for nome := range r.backends {
-		out = append(out, nome)
+	for chave := range r.backends {
+		out = append(out, chave)
 	}
+	sort.Strings(out)
 	return out
 }
