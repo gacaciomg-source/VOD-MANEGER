@@ -181,6 +181,40 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Avisar a aplicação de que agora existe um proxy na frente dela.
+#
+# Sem isto, TODA requisição vinda pelo domínio chega com o endereço 127.0.0.1 — que é o
+# nginx, não o espectador. As consequências não aparecem como erro, e é por isso que elas
+# demoram a ser notadas:
+#
+#   - o limite de tentativas de login passa a ser compartilhado por todo mundo que entra
+#     pelo domínio: alguém errando a senha tranca os outros;
+#   - o limite de telas simultâneas por credencial deixa de distinguir espectadores, porque
+#     todos aparecem com o mesmo IP;
+#   - o registro de falhas de reprodução aponta sempre para a própria máquina, e some a
+#     informação que diria de onde veio o problema.
+#
+# TRUST_PROXY só faz o X-Forwarded-For ser aceito quando o vizinho imediato é o loopback —
+# ou seja, quando quem entregou foi este nginx. Quem chega direto na porta da aplicação não
+# consegue forjar o próprio IP com ele.
+ajustar_ambiente() {
+    local chave="$1" valor="$2"
+    if grep -q "^${chave}=" "$AMBIENTE"; then
+        sed -i "s|^${chave}=.*|${chave}=${valor}|" "$AMBIENTE"
+    else
+        printf '%s=%s\n' "$chave" "$valor" >> "$AMBIENTE"
+    fi
+}
+
+# O cookie de sessão NÃO é forçado a Secure aqui, de propósito. Ele já passa a ser marcado
+# como seguro sozinho nas requisições que chegam por HTTPS, e forçá-lo globalmente
+# quebraria a entrada por http://IP:PORTA — que é exatamente a saída de emergência que
+# nunca se fecha.
+ajustar_ambiente VODM_TRUST_PROXY true
+systemctl restart vodmanager
+ok "o serviço passou a enxergar o IP real de quem acessa"
+
+# ---------------------------------------------------------------------------
 passo "6/6  Conferindo que o painel responde pelo domínio"
 
 ufw allow 'Nginx Full' >/dev/null 2>&1 || true

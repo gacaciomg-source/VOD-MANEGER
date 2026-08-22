@@ -82,7 +82,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.deps.Log.Warn("senha trocada mas as sessões continuaram abertas", "erro", err)
 	}
-	limparCookieSessao(w, s.deps.CookieName, s.deps.CookieSecure)
+	limparCookieSessao(w, s.deps.CookieName, s.cookieSeguro(r))
 
 	s.logEvent(r, "auth", "info", "senha do painel trocada", actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{

@@ -356,18 +356,26 @@ func redigir(err error) error {
 }
 
 // clientIP extrai o IP do cliente.
+//
+// X-Forwarded-For só é aceito quando quem entregou a requisição foi o proxy da própria
+// máquina. O cabeçalho é escrito pelo cliente e reescrito pelo proxy — ele não prova nada
+// sozinho, e a porta da aplicação continua aberta ao mundo de propósito. Sem a exigência
+// do loopback, qualquer pessoa escolheria o IP com que aparece, e o limite de telas
+// simultâneas por credencial deixaria de significar coisa alguma.
 func clientIP(r *http.Request, confiarProxy bool) string {
-	if confiarProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			primeiro, _, _ := strings.Cut(xff, ",")
-			if ip := strings.TrimSpace(primeiro); ip != "" {
-				return ip
-			}
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if confiarProxy {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				primeiro, _, _ := strings.Cut(xff, ",")
+				if v := strings.TrimSpace(primeiro); v != "" {
+					return v
+				}
+			}
+		}
 	}
 	return host
 }

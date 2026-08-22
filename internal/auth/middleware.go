@@ -95,7 +95,23 @@ func bearerToken(r *http.Request) string {
 // for verdadeiro — caso contrário o cabeçalho é forjável e o rate limit por IP vira
 // inútil.
 func ClientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+
+	// X-Forwarded-For só vale quando quem entregou a requisição foi o proxy da própria
+	// máquina.
+	//
+	// O cabeçalho é escrito pelo cliente e reescrito pelo proxy — ele não prova nada
+	// sozinho. Com a porta da aplicação aberta ao mundo (e ela FICA aberta de propósito,
+	// para os links já entregues continuarem funcionando), confiar nele sem olhar de onde
+	// veio deixaria qualquer pessoa escolher o IP com que aparece: o suficiente para
+	// escapar do limite de telas simultâneas e para envenenar o registro de falhas.
+	//
+	// Exigir que o vizinho imediato seja o loopback fecha isso sem custo nenhum: o nginx
+	// fala de 127.0.0.1, e quem chega direto na porta não fala.
+	if trustProxy && ehLoopback(host) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			first, _, _ := strings.Cut(xff, ",")
 			if ip := strings.TrimSpace(first); ip != "" {
@@ -103,9 +119,11 @@ func ClientIP(r *http.Request, trustProxy bool) string {
 			}
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
 	return host
+}
+
+// ehLoopback informa se o endereço é a própria máquina.
+func ehLoopback(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

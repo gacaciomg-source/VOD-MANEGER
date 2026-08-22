@@ -2,8 +2,10 @@ package api
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"vodmanager/internal/auth"
@@ -67,7 +69,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    result.Token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.deps.CookieSecure,
+		Secure:   s.cookieSeguro(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  result.ExpiresAt,
 	})
@@ -102,12 +104,46 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.deps.CookieSecure,
+		Secure:   s.cookieSeguro(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 	s.logEvent(r, "auth", "info", "logout", actorOf(r), nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// cookieSeguro decide, por requisição, se o cookie de sessão exige HTTPS.
+//
+// Por requisição, e não por configuração global, porque as duas portas de entrada convivem
+// e sempre vão conviver: o domínio com certificado, e o http://IP:PORTA que nunca se fecha
+// para ninguém ficar sem entrada. Uma chave global teria de escolher uma das duas —
+// ligada, o navegador descartaria o cookie vindo pelo IP e o login pararia de funcionar
+// justo no caminho que existe para socorrer; desligada, a sessão trafegaria sem a proteção
+// que o HTTPS já permite dar.
+//
+// VODM_COOKIE_SECURE continua valendo como imposição: quem só atende por HTTPS pode
+// exigir o atributo sempre.
+func (s *Server) cookieSeguro(r *http.Request) bool {
+	if s.deps.CookieSecure || r.TLS != nil {
+		return true
+	}
+	// Atrás do nginx a conexão TLS termina antes de chegar aqui; quem sabe do esquema
+	// original é o cabeçalho. Vale a mesma regra do IP do cliente: só é aceito quando quem
+	// entregou a requisição foi o proxy da própria máquina.
+	if s.deps.TrustProxy && ehLoopback(r.RemoteAddr) {
+		return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	}
+	return false
+}
+
+// ehLoopback informa se a requisição veio da própria máquina.
+func ehLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // limparCookieSessao apaga o cookie de sessão no navegador.
