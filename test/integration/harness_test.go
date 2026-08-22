@@ -98,7 +98,11 @@ func truncateAll(t *testing.T, pool *db.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 		TRUNCATE sources, users, settings, events,
-		         categories, contents, unresolved_items
+		         categories, contents, unresolved_items,
+		         -- Explícita, e não pelo CASCADE: o acervo próprio não tem chave
+		         -- estrangeira para variante nenhuma, então ele sobreviveria à limpeza de
+		         -- sources e vazaria de um teste para o outro.
+		         arquivos_guardados
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("limpando tabelas: %v", err)

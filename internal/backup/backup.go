@@ -58,6 +58,14 @@ var tabelas = []string{
 	"seasons",
 	"episodes",
 	"source_variants",
+	// O REGISTRO das cópias viaja; os arquivos, não.
+	//
+	// Parece contraditório salvar a ficha de um arquivo que ficou para trás, e não é: para
+	// o acervo próprio guardado na nuvem, o localizador continua válido na máquina nova —
+	// o Drive é o mesmo. E mesmo para o que estava em disco local, perder a ficha seria
+	// perder a informação de que aquele acervo existiu, que é o que permite reenviá-lo.
+	// O cache que não achar o arquivo se refaz sozinho.
+	"arquivos_guardados",
 	"unresolved_items",
 	"match_decisions",
 	"duplicatas_ignoradas",
