@@ -2457,6 +2457,16 @@ function blocoAaPanel(porta) {
     location ^~ /series/ { proxy_pass ${alvo}; }
     location ^~ /stream/ { proxy_pass ${alvo}; }
 
+    # A folha de estilo e o script do painel.
+    #
+    # O aaPanel poe no arquivo do site uma regra assim:
+    #     location ~ .*\\.(js|css)?$ { expires 12h; access_log off; }
+    # Ela captura /app.css e /app.js e tenta servi-los da pasta do site, que
+    # esta vazia. O painel abriria como uma pagina branca sem estilo nenhum, e
+    # nada no navegador diria por que.
+    location = /app.css { proxy_pass ${alvo}; }
+    location = /app.js  { proxy_pass ${alvo}; }
+
     # O painel e todo o resto.
     location / { proxy_pass ${alvo}; }
     # ================== VOD Manager — fim ===================`;
