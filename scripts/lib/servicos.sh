@@ -90,6 +90,14 @@ Description=Atualização do VOD Manager (disparada pelo painel)
 [Service]
 Type=oneshot
 WorkingDirectory=${FONTE}
+# HOME não é definido pelo systemd em serviços de sistema, e o Go deriva dele o lugar do
+# cache de módulos. Sem esta linha o build morre com "module cache not found: neither
+# GOMODCACHE nor GOPATH is set" — uma mensagem que não tem nada a ver com o projeto e que
+# só aparece pelo botão do painel, nunca pelo terminal, onde o sudo define o HOME.
+#
+# O git também precisa dele para achar a configuração.
+Environment=HOME=/root
+Environment=PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # O pedido é consumido ANTES de começar: se o script falhar, o arquivo já não existe e a
 # atualização não fica repetindo em laço.
 ExecStartPre=/bin/rm -f /opt/vodmanager/runtime/solicitar-atualizacao
@@ -117,6 +125,9 @@ Description=Configuração de domínio do VOD Manager (disparada pelo painel)
 [Service]
 Type=oneshot
 WorkingDirectory=${FONTE}
+# Sem HOME, o certbot e o git procuram configuração num lugar que não existe.
+Environment=HOME=/root
+Environment=PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # O pedido carrega o domínio e o e-mail, e é consumido ANTES de começar: se o script
 # falhar, o arquivo já não existe e a tarefa não fica repetindo em laço.
 ExecStart=/bin/bash -c 'read -r d e < /opt/vodmanager/runtime/solicitar-dominio; rm -f /opt/vodmanager/runtime/solicitar-dominio; ${FONTE}/scripts/dominio.sh "\$d" "\$e"'
@@ -146,6 +157,10 @@ Description=Migração do VOD Manager para outra máquina (disparada pelo painel
 [Service]
 Type=oneshot
 WorkingDirectory=${FONTE}
+# O ssh guarda em HOME o arquivo de hosts conhecidos. Sem ele, a primeira conexão com a
+# máquina de destino não teria onde registrar a chave dela.
+Environment=HOME=/root
+Environment=PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/bin/bash ${FONTE}/scripts/migrar_pedido.sh
 # Copiar o catálogo e compilar no destino leva bem mais que o padrão de 5 minutos.
 TimeoutStartSec=7200

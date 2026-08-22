@@ -77,6 +77,27 @@ exige scripts/lib/servicos.sh \
 exige scripts/atualizar.sh '^ *vodm_atualizar_fonte ' \
     "o atualizador busca a versão nova do repositório"
 
+echo
+echo "O que o systemd não fornece e os scripts precisam"
+
+# O systemd NÃO define HOME em serviços de sistema. O Go deriva dele o cache de módulos, e
+# git, ssh e certbot procuram nele a configuração.
+#
+# O que torna esta falha traiçoeira é ela ser assimétrica: pelo terminal o sudo define o
+# HOME e tudo funciona; pelo BOTÃO do painel não há HOME, e o build morre com "module cache
+# not found" — uma mensagem sem relação nenhuma com o projeto, no único caminho que existe
+# para não precisar de terminal.
+for script in atualizar dominio migrar_pedido; do
+    exige "scripts/${script}.sh" '^export HOME="\$\{HOME:-/root\}"' \
+        "${script}.sh define HOME quando não há nenhum"
+done
+
+# A unidade também define, para o caso de alguém apagar a defesa do script. Cinto e
+# suspensório de propósito: a unidade nova só é escrita por uma atualização bem-sucedida,
+# então ela sozinha nunca consertaria a atualização que está falhando.
+exige scripts/lib/servicos.sh '^Environment=HOME=/root' \
+    "as unidades do systemd definem HOME"
+
 # O binário é do root: o serviço só precisa executá-lo.
 proibe scripts/instalar.sh \
     'install -o vodmanager' \

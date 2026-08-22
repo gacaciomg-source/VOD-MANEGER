@@ -23,6 +23,12 @@
 # antes de entrar, e se o painel parar de responder o script volta atrás sozinho.
 set -euo pipefail
 
+# O systemd nao define HOME em servicos de sistema, e certbot, git e ssh procuram a
+# configuracao deles a partir dele. Sem esta linha, o que funciona pelo terminal (onde o
+# sudo define o HOME) falha pelo botao do painel — que e o caminho que existe justamente
+# para nao precisar de terminal.
+export HOME="${HOME:-/root}"
+
 # Um ou mais nomes, separados por vírgula. O primeiro é o principal: é ele que vira o
 # endereço público e o que aparece nos links.
 #

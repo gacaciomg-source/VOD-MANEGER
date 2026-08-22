@@ -30,6 +30,12 @@
 #
 set -uo pipefail
 
+# O systemd nao define HOME em servicos de sistema, e certbot, git e ssh procuram a
+# configuracao deles a partir dele. Sem esta linha, o que funciona pelo terminal (onde o
+# sudo define o HOME) falha pelo botao do painel — que e o caminho que existe justamente
+# para nao precisar de terminal.
+export HOME="${HOME:-/root}"
+
 PEDIDO=/opt/vodmanager/runtime/solicitar-migracao
 REGISTRO=/opt/vodmanager/runtime/ultima-migracao.log
 FONTE="${VODM_FONTE:-/opt/vodmanager-fonte}"

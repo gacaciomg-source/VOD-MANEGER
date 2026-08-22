@@ -58,6 +58,23 @@ fi
 # está instalado numa máquina onde ele está.
 export PATH="$PATH:/usr/local/go/bin"
 
+# HOME, quando não há ninguém logado.
+#
+# O systemd NÃO define HOME em serviços de sistema. E o Go deriva dele onde fica o cache de
+# módulos: sem HOME, o build morre com "module cache not found: neither GOMODCACHE nor
+# GOPATH is set" — uma mensagem que não tem relação nenhuma com o projeto.
+#
+# O detalhe cruel é que isso só acontecia pelo BOTÃO do painel. Pelo terminal o sudo define
+# o HOME, então a mesma atualização funcionava à mão e falhava pelo painel, que é
+# exatamente o caminho que existe para não precisar de terminal.
+#
+# A unidade do systemd também passou a definir HOME, mas isto aqui não é redundante: a
+# unidade nova só é escrita no passo 5 de uma atualização BEM-SUCEDIDA. Sem a defesa no
+# próprio script, a primeira atualização depois desta correção continuaria falhando, e o
+# botão só voltaria a funcionar para quem rodasse o instalador à mão — que é justamente o
+# que estamos tentando deixar de precisar.
+export HOME="${HOME:-/root}"
+
 # ---------------------------------------------------------------------------
 # As três fases, e por que elas existem
 #
