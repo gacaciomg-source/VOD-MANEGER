@@ -385,6 +385,24 @@ if [ "$OK" -ne 1 ]; then
     exit 1
 fi
 
+# O endereço público passa a ser o domínio.
+#
+# Sem isto, o domínio funciona e os LINKS continuam saindo com o endereço antigo — que
+# depois de uma migração é o IP da máquina que ficou para trás. O painel abre, o catálogo
+# aparece, e o vídeo não toca: o sintoma mais confuso possível, porque tudo o que se olha
+# está certo.
+#
+# Os links já entregues não mudam nem quebram: a porta ${PORTA} continua aberta. O que muda
+# é o que sai daqui em diante — as listas M3U e a API Xtream passam a entregar o domínio.
+if sudo -u postgres psql -d vodmanager -qc \
+    "INSERT INTO settings (key, value) VALUES ('public_base_url', to_jsonb('${ESQUEMA}://${DOMINIO}'::text))
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now();" >/dev/null 2>&1; then
+    ok "endereço público: ${ESQUEMA}://${DOMINIO}"
+else
+    aviso "não consegui gravar o endereço público; ajuste em Configurações para"
+    aviso "${ESQUEMA}://${DOMINIO} — sem isso os links continuam com o endereço antigo."
+fi
+
 cat <<FIM
 
 $(ok "Domínio configurado.")
