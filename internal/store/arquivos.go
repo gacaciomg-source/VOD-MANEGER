@@ -358,9 +358,9 @@ type FiltroDeArquivos struct {
 // lista de números, e ninguém decide o que apagar olhando ids.
 type ArquivoNaTela struct {
 	ArquivoGuardado
-	Titulo     string  `json:"titulo"`
-	NuvemNome  *string `json:"nuvem_nome"`
-	FonteNome  *string `json:"fonte_nome"`
+	Titulo    string  `json:"titulo"`
+	NuvemNome *string `json:"nuvem_nome"`
+	FonteNome *string `json:"fonte_nome"`
 }
 
 // ListarArquivos devolve o acervo para a tela.
