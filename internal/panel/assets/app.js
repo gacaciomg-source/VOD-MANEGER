@@ -2806,11 +2806,18 @@ async function desenharMigracao() {
 
   area.innerHTML = `
     <p class="discreto" style="margin:-8px 0 12px">
-      Leva para a máquina nova o catálogo inteiro <b>com os mesmos ids</b>, a chave de
+      Leva para a outra máquina o catálogo inteiro <b>com os mesmos ids</b>, a chave de
       criptografia, os usuários do painel, as fontes, as credenciais de saída, o consumo já
       contado e as decisões que você tomou.
       <b>Nada aqui é desligado ou apagado</b> — os seus clientes continuam assistindo neste
       servidor enquanto você confere o outro.
+    </p>
+    <p class="dica" style="margin:0 0 12px">
+      <b>Se a máquina de destino já tiver o VOD Manager</b>, nada é reinstalado lá: só os
+      dados são trazidos, e o endereço público, o domínio e o certificado de lá ficam
+      exatamente como estão. Serve para manter uma segunda máquina em dia — ela recebe as
+      categorias, as pastas e as decisões que você tomou aqui desde a última vez, e leva
+      minutos em vez de uma instalação inteira.
     </p>
     ${avisoDominio}
     ${m.disponivel ? `
@@ -2865,7 +2872,8 @@ async function desenharMigracao() {
 
     const ok = await confirmar('Migrar para outra máquina',
       `Tudo o que está neste servidor será copiado para ${destino}. ` +
-      'Se já houver uma instalação lá, os dados dela são SUBSTITUÍDOS pelos daqui. ' +
+      'Se já houver uma instalação lá, os dados dela são SUBSTITUÍDOS pelos daqui — ' +
+      'mas nada é reinstalado, e a configuração de endereço e domínio de lá é preservada. ' +
       'Este servidor não é alterado: continua no ar, com os dados intactos.',
       'Migrar agora');
     if (!ok) return;

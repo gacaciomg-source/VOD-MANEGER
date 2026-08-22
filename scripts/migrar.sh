@@ -34,6 +34,10 @@ PASTA_REMOTA="/root/VOD-MANEGER"
 # SEM_PERGUNTA vale para quando a migração é disparada pelo painel: não há terminal para
 # digitar "substituir", e a confirmação já aconteceu na tela, com o aviso e um clique.
 SEM_PERGUNTA=0
+# SOMENTE_DADOS e FORCAR_COMPLETO forçam o modo. Sem nenhum dos dois, o script decide
+# sozinho: destino com o sistema instalado recebe só os dados; destino vazio recebe tudo.
+SOMENTE_DADOS=0
+FORCAR_COMPLETO=0
 
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
 verde()    { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -46,6 +50,13 @@ ajuda() {
     echo
     echo "Roda no servidor que TEM os dados e copia tudo para o destino, preservando os ids."
     echo "Não desliga nem apaga nada no servidor atual."
+    echo
+    echo "O modo é escolhido sozinho:"
+    echo "  destino sem o sistema  -> instala tudo lá e depois traz os dados"
+    echo "  destino COM o sistema  -> traz só os dados (minutos a menos, nada reinstalado)"
+    echo
+    echo "  --somente-dados   força trazer só os dados"
+    echo "  --completo        força refazer a instalação no destino"
 }
 
 while [ $# -gt 0 ]; do
@@ -55,7 +66,9 @@ while [ $# -gt 0 ]; do
         --porta-app) PORTA_APP="$2"; shift 2 ;;
         --repo)      REPO="$2"; shift 2 ;;
         --pasta)     PASTA_REMOTA="$2"; shift 2 ;;
-        --sim)       SEM_PERGUNTA=1; shift ;;
+        --sim)            SEM_PERGUNTA=1; shift ;;
+        --somente-dados)  SOMENTE_DADOS=1; shift ;;
+        --completo)       FORCAR_COMPLETO=1; shift ;;
         -h|--help)   ajuda; exit 0 ;;
         *) erro "opção desconhecida: $1" ;;
     esac
@@ -104,9 +117,36 @@ DISTRO=$("${SSH[@]}" "$DESTINO" 'command -v apt-get >/dev/null && echo apt || ec
 [ "$DISTRO" = "apt" ] || erro "o destino não é Ubuntu/Debian; o instalador não roda lá."
 
 # Um destino que já tem dados é o cenário em que a migração apaga o que não devia.
-JA_TEM=$("${SSH[@]}" "$DESTINO" "test -f $AMBIENTE && echo sim || echo nao")
+JA_TEM=$("${SSH[@]}" "$DESTINO" "test -f $AMBIENTE && test -x $BINARIO && echo sim || echo nao")
+
+# O modo de trabalho.
+#
+# Instalar Postgres, baixar o Go e compilar o projeto leva vários minutos — e não faz o
+# menor sentido quando a máquina de destino JÁ tem o sistema rodando. Nesse caso o que se
+# quer é outra coisa: trazer os dados de novo, para o destino ficar com o catálogo, as
+# categorias e as decisões que foram tomadas aqui desde a última vez.
+#
+# É a diferença entre "mudar de casa" e "atualizar a cópia".
+MODO=completo
+if [ "$SOMENTE_DADOS" = "1" ]; then
+    MODO=dados
+elif [ "$JA_TEM" = "sim" ] && [ "$FORCAR_COMPLETO" != "1" ]; then
+    MODO=dados
+fi
+
+if [ "$MODO" = "dados" ] && [ "$JA_TEM" != "sim" ]; then
+    erro "--somente-dados exige que o destino já tenha o sistema instalado, e ele não tem.
+       Rode sem essa opção para instalar do zero."
+fi
+
 if [ "$JA_TEM" = "sim" ]; then
-    aviso "o destino JÁ tem uma instalação do VOD Manager."
+    if [ "$MODO" = "dados" ]; then
+        aviso "o destino JÁ tem o VOD Manager instalado."
+        aviso "modo SOMENTE DADOS: nada será reinstalado lá; só os dados são trazidos."
+    else
+        aviso "o destino JÁ tem o VOD Manager instalado, e --completo foi pedido:"
+        aviso "a instalação será refeita por cima."
+    fi
     aviso "continuar SUBSTITUI os dados de lá pelos daqui."
     if [ "$SEM_PERGUNTA" = "1" ]; then
         aviso "confirmado pelo painel (--sim); seguindo."
@@ -118,7 +158,11 @@ if [ "$JA_TEM" = "sim" ]; then
         [ "$r" = "substituir" ] || { echo "Cancelado. Nada foi alterado."; exit 1; }
     fi
 fi
-verde "    destino pronto para receber"
+if [ "$MODO" = "dados" ]; then
+    verde "    destino pronto para receber (somente dados)"
+else
+    verde "    destino pronto para receber (instalação completa)"
+fi
 
 # ---------------------------------------------------------------------------
 passo "2/8  Backup daqui"
@@ -164,6 +208,9 @@ echo "    conteúdos aqui: $CONTAGEM_AQUI   maior id: $MAIOR_ID_AQUI"
 # ---------------------------------------------------------------------------
 passo "3/8  Levando o código para o destino"
 
+if [ "$MODO" = "dados" ]; then
+    echo "    pulado: o destino já tem o sistema"
+else
 "${SSH[@]}" "$DESTINO" "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -175,23 +222,82 @@ passo "3/8  Levando o código para o destino"
     fi
 "
 verde "    $PASTA_REMOTA"
+fi
 
 # ---------------------------------------------------------------------------
 passo "4/8  Levando a chave de criptografia"
 
-# A chave vai ANTES de o instalador rodar. O instalador preserva a chave que encontrar em
-# /etc/vodmanager.env e só gera uma nova quando não há nenhuma — então plantá-la aqui é o
-# que faz o destino nascer capaz de ler os dados que vão chegar.
-#
-# Vai pela entrada padrão, e não como argumento: argumento aparece em `ps` para qualquer
-# usuário da máquina enquanto o comando roda.
-printf 'VODM_ENCRYPTION_KEY=%s\n' "$CHAVE" | \
-    "${SSH[@]}" "$DESTINO" "umask 077 && cat > $AMBIENTE"
-verde "    chave instalada no destino"
+# A chave vai pela entrada padrão, e não como argumento: argumento aparece em `ps` para
+# qualquer usuário da máquina enquanto o comando roda.
+if [ "$MODO" = "dados" ]; then
+    # Trocar SÓ a linha da chave.
+    #
+    # No modo completo o arquivo pode ser reescrito à vontade, porque o instalador o
+    # regenera inteiro logo depois. Aqui não há instalador: sobrescrever levaria junto a
+    # URL do banco, o endereço de escuta e tudo o mais — e o destino não subiria mais.
+    #
+    # A chave é base64 (A-Z a-z 0-9 + / =), então nenhum caractere dela colide com o
+    # delimitador | do sed nem com o & da substituição.
+    printf '%s\n' "$CHAVE" | "${SSH[@]}" "$DESTINO" "
+        umask 077
+        set -e
+        read -r chave
+        if grep -q '^VODM_ENCRYPTION_KEY=' $AMBIENTE; then
+            sed -i \"s|^VODM_ENCRYPTION_KEY=.*|VODM_ENCRYPTION_KEY=\$chave|\" $AMBIENTE
+        else
+            printf 'VODM_ENCRYPTION_KEY=%s\n' \"\$chave\" >> $AMBIENTE
+        fi
+    "
+    verde "    chave conferida no destino (o resto da configuração dele foi preservado)"
+else
+    # A chave vai ANTES de o instalador rodar. O instalador preserva a chave que encontrar
+    # em /etc/vodmanager.env e só gera uma nova quando não há nenhuma — então plantá-la
+    # aqui é o que faz o destino nascer capaz de ler os dados que vão chegar.
+    printf 'VODM_ENCRYPTION_KEY=%s\n' "$CHAVE" | \
+        "${SSH[@]}" "$DESTINO" "umask 077 && cat > $AMBIENTE"
+    verde "    chave instalada no destino"
+fi
+
+# medir_la consulta o banco do destino. A consulta vai pela entrada padrão (psql -f -), e
+# não embutida no comando remoto: assim nenhuma aspa precisa sobreviver a duas camadas de
+# shell.
+medir_la() {
+    "${SSH[@]}" "$DESTINO" \
+        "set -a; . $AMBIENTE; set +a; psql \"\$VODM_DATABASE_URL\" -tA -f - 2>/dev/null" \
+        <<< "$1" | tr -d '[:space:]'
+}
 
 # ---------------------------------------------------------------------------
 passo "5/8  Instalando no destino"
 
+if [ "$MODO" = "dados" ]; then
+    # Sem instalador, ninguém garante que o destino entende o formato que estamos mandando.
+    #
+    # A restauração recusa um backup de um schema MAIS NOVO que o da máquina — e faz isso
+    # porque restaurar num schema antigo falharia por coluna inexistente, de um jeito
+    # incompreensível. Conferir aqui transforma essa recusa numa instrução: atualize o
+    # destino primeiro.
+    #
+    # A conferência vem ANTES de enviar o arquivo, de propósito: descobrir isso depois de
+    # subir um backup de vários GB seria pagar a espera para nada.
+    ESQUEMA_AQUI=$(medir "SELECT coalesce(max(version),0) FROM schema_migrations")
+    ESQUEMA_LA=$(medir_la "SELECT coalesce(max(version),0) FROM schema_migrations;")
+
+    if [ -z "$ESQUEMA_LA" ]; then
+        erro "não consegui ler a versão do banco do destino.
+       Confira se o VOD Manager de lá está de pé:  ssh $DESTINO 'systemctl status vodmanager'"
+    fi
+    if [ "$ESQUEMA_LA" -lt "$ESQUEMA_AQUI" ]; then
+        erro "o destino está numa versão MAIS ANTIGA que esta (schema $ESQUEMA_LA contra $ESQUEMA_AQUI).
+       A restauração recusaria o backup, e com razão: colunas que existem aqui não
+       existem lá.
+
+       Atualize o destino primeiro e rode isto de novo:
+         ssh $DESTINO 'sudo /opt/vodmanager-fonte/scripts/atualizar.sh'"
+    fi
+    echo "    schema do destino: $ESQUEMA_LA (o daqui é $ESQUEMA_AQUI) — compatível"
+    verde "    pulado: nada é reinstalado no modo somente dados"
+else
 echo "    isto leva alguns minutos (Postgres, Go, compilação)"
 # O -t dá ao instalador remoto um terminal para escrever o progresso. Ele só faz sentido
 # quando ESTE lado tem terminal: disparada pelo painel, a migração não tem nenhum, e o ssh
@@ -199,6 +305,7 @@ echo "    isto leva alguns minutos (Postgres, Go, compilação)"
 TTY=(-t)
 [ -t 0 ] || TTY=()
 "${SSH[@]}" "${TTY[@]}" "$DESTINO" "cd '$PASTA_REMOTA' && VODM_PORTA=$PORTA_APP bash scripts/instalar.sh"
+fi
 
 # ---------------------------------------------------------------------------
 passo "6/8  Enviando os dados"
@@ -233,13 +340,6 @@ SAUDE=$("${SSH[@]}" "$DESTINO" \
     "curl -fsS http://127.0.0.1:$PORTA_APP/healthz >/dev/null 2>&1 && echo ok || echo falhou")
 [ "$SAUDE" = "ok" ] || erro "o serviço não respondeu no destino. Veja lá: journalctl -u vodmanager -n 50"
 
-# A consulta vai pela entrada padrão (psql -f -), e não embutida no comando remoto: assim
-# nenhuma aspa precisa sobreviver a duas camadas de shell.
-medir_la() {
-    "${SSH[@]}" "$DESTINO" \
-        "set -a; . $AMBIENTE; set +a; psql \"\$VODM_DATABASE_URL\" -tA -f - 2>/dev/null" \
-        <<< "$1" | tr -d '[:space:]'
-}
 CONTAGEM_LA=$(medir_la "SELECT count(*) FROM contents WHERE status <> 'deleted';")
 MAIOR_ID_LA=$(medir_la "SELECT coalesce(max(id),0) FROM contents;")
 
@@ -261,6 +361,29 @@ verde "    os números batem: os ids foram preservados"
 
 IP_DESTINO=${DESTINO##*@}
 echo
+
+# O fim é diferente conforme o que acabou de acontecer.
+#
+# Numa instalação nova, o que vem a seguir é conferir e decidir quando desligar este
+# servidor — e, se houver domínio, apontar o DNS e emitir o certificado.
+#
+# Numa atualização de dados, nada disso se aplica: o destino já está no ar, já tem o
+# endereço dele e provavelmente já tem o domínio. Repetir as instruções de mudança ali
+# seria mandar a pessoa mexer no que está funcionando.
+if [ "$MODO" = "dados" ]; then
+    verde "Dados atualizados no destino."
+    echo
+    echo "  O destino agora tem o mesmo catálogo, as mesmas categorias e as mesmas"
+    echo "  decisões que este servidor — com os MESMOS ids."
+    echo
+    echo "  Nada foi reinstalado lá: o endereço público, o domínio e o certificado do"
+    echo "  destino continuam exatamente como estavam."
+    echo
+    aviso "O servidor atual continua no ar. Nada foi desligado aqui."
+    echo
+    exit 0
+fi
+
 verde "Migração concluída."
 echo
 echo "  Painel no destino:  http://${IP_DESTINO}:${PORTA_APP}"

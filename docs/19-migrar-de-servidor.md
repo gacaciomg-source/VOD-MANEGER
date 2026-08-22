@@ -115,3 +115,38 @@ bash scripts/migrar_test.sh
 Cobre: a chave chegar e chegar antes do instalador; a restauração não usar `--forcar`; a
 origem não ser tocada; contagem divergente falhar; id divergente falhar; medida vazia não
 ser confundida com sucesso; destino fora do ar falhar; e as recusas de entrada.
+
+## Quando o destino já tem o sistema
+
+O script percebe sozinho e muda de modo: em vez de reinstalar tudo, ele **traz só os
+dados**.
+
+```bash
+sudo ./scripts/migrar.sh --destino root@IP-DA-OUTRA-MAQUINA
+```
+
+Serve para manter uma segunda máquina em dia. Ela recebe o catálogo, as categorias, as
+pastas e as decisões que você tomou aqui desde a última vez — com os mesmos ids.
+
+**O que NÃO é tocado no destino:** o endereço público, o domínio, o certificado, o nginx e
+o `/etc/vodmanager.env` dele. Só a linha da chave de criptografia é ajustada, porque sem a
+mesma chave os dados que chegam seriam bytes ilegíveis.
+
+Isso é o que torna o modo útil: a máquina de destino continua sendo ela mesma, com o
+endereço dela, e só o conteúdo é atualizado.
+
+**Antes de enviar o arquivo**, o script compara a versão do banco dos dois lados. Se o
+destino estiver mais antigo, ele para e diz o que fazer — restaurar um backup novo num
+schema velho falharia por coluna inexistente, e descobrir isso depois de subir vários GB
+seria pagar a espera para nada.
+
+```bash
+ssh root@IP-DO-DESTINO 'sudo /opt/vodmanager-fonte/scripts/atualizar.sh'
+```
+
+Para forçar um modo em vez de deixar o script escolher:
+
+| Opção | O que faz |
+|---|---|
+| `--somente-dados` | só os dados, mesmo que você quisesse reinstalar |
+| `--completo` | refaz a instalação no destino, mesmo que ele já tenha o sistema |

@@ -123,6 +123,13 @@ rodar() {
     echo $?
 }
 
+# rodar_com passa opções adicionais. Existe para os cenários em que o modo de trabalho é a
+# própria coisa sendo testada.
+rodar_com() {
+    bash "$RAIZ/scripts/migrar.sh" --destino root@198.51.100.7 "$@" </dev/null > "$CENARIO/saida.txt" 2>&1
+    echo $?
+}
+
 # ---------------------------------------------------------------------------
 echo
 echo "migrar.sh — caminho feliz"
@@ -273,6 +280,86 @@ saida=$(bash "$RAIZ/scripts/migrar.sh" --destino root@198.51.100.7 </dev/null 2>
 grep -q 'Cancelado' <<< "$saida" \
     && ok "cancela quando o destino já tem dados e ninguém confirma" \
     || falha "sobrescreveu um destino com dados sem confirmação"
+desmontar_cenario
+
+# ---------------------------------------------------------------------------
+# Modo somente dados.
+#
+# Reinstalar Postgres, Go e compilar leva vários minutos, e não faz sentido quando a máquina
+# de destino já tem o sistema rodando — aí o que se quer é só trazer o catálogo e as
+# decisões tomadas desde a última vez.
+#
+# O ponto delicado é o arquivo de configuração do destino. No modo completo ele pode ser
+# reescrito, porque o instalador o regenera logo depois. Aqui não há instalador: sobrescrever
+# levaria junto a URL do banco, e o destino não subiria mais.
+echo
+echo "migrar.sh — destino que já tem o sistema"
+montar_cenario
+export DESTINO_JA_TEM=sim
+codigo=$(rodar_com --sim)
+
+[ "$codigo" = "0" ] && ok "termina com sucesso" || {
+    falha "esperava código 0, obtive $codigo"
+    sed 's/^/       /' "$CENARIO/saida.txt"
+}
+
+grep -q 'instalar.sh' "$REGISTRO" \
+    && falha "reinstalou o sistema num destino que já o tinha" \
+    || ok "não reinstala nada no destino"
+
+grep -q 'git clone\|git fetch' "$REGISTRO" \
+    && falha "clonou o código num destino que já o tem" \
+    || ok "não leva o código de novo"
+
+# `cat > /etc/vodmanager.env` trunca o arquivo. Sem o instalador para regenerá-lo, isso
+# apagaria a URL do banco do destino e ele nunca mais subiria.
+grep -q 'cat > /etc/vodmanager.env' "$REGISTRO" \
+    && falha "sobrescreveu o /etc/vodmanager.env do destino" \
+    || ok "preserva a configuração do destino, trocando só a linha da chave"
+
+grep -q 'VODM_ENCRYPTION_KEY=' "$REGISTRO" \
+    && ok "a chave é conferida no destino" \
+    || falha "a chave não foi tratada"
+
+grep -q 'restaurar --arquivo' "$REGISTRO" \
+    && ok "os dados são restaurados" || falha "os dados não foram restaurados"
+
+grep -q 'schema_migrations' "$REGISTRO" \
+    && ok "confere a compatibilidade do schema antes de enviar" \
+    || falha "não conferiu o schema do destino"
+desmontar_cenario
+
+# --completo desfaz a escolha automática: quem quer refazer a instalação, refaz.
+montar_cenario
+export DESTINO_JA_TEM=sim
+codigo=$(rodar_com --sim --completo)
+grep -q 'instalar.sh' "$REGISTRO" \
+    && ok "--completo reinstala mesmo num destino que já tem o sistema" \
+    || falha "--completo não reinstalou"
+desmontar_cenario
+
+# Um destino MAIS ANTIGO recusaria o backup na restauração, por coluna inexistente. Melhor
+# dizer isso antes de subir o arquivo do que depois.
+montar_cenario
+export DESTINO_JA_TEM=sim MAIOR_ID_LOCAL=11 MAIOR_ID_REMOTO=5
+codigo=$(rodar_com --sim)
+[ "$codigo" != "0" ] \
+    && ok "falha quando o destino está numa versão mais antiga" \
+    || falha "aceitou restaurar num destino mais antigo"
+grep -q 'MAIS ANTIGA' "$CENARIO/saida.txt" \
+    && ok "diz que o destino precisa ser atualizado antes" \
+    || falha "não explicou o motivo da recusa"
+grep -q 'SCP' "$REGISTRO" \
+    && falha "enviou o backup antes de conferir a compatibilidade" \
+    || ok "não gasta a subida do arquivo para nada"
+desmontar_cenario
+
+# --somente-dados num destino vazio não tem o que fazer.
+montar_cenario
+saida=$(bash "$RAIZ/scripts/migrar.sh" --destino root@198.51.100.7 --somente-dados </dev/null 2>&1 || true)
+grep -q 'exige que o destino já tenha' <<< "$saida" \
+    && ok "--somente-dados recusa um destino sem o sistema" \
+    || falha "aceitou --somente-dados num destino vazio"
 desmontar_cenario
 
 # ---------------------------------------------------------------------------
