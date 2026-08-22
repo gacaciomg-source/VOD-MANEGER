@@ -2938,7 +2938,35 @@ async function verConfiguracoes() {
   const c = await api('/settings');
 
   $('#visao').innerHTML = `
-    <div class="cartao" style="margin-top:0">
+    ${c.endereco_atual_diverge ? `
+      <div class="cartao" style="margin-top:0;border-color:#4a3a12">
+        <h2>⚠️ As listas estão entregando um endereço diferente do seu</h2>
+        <p class="discreto" style="margin:-8px 0 12px">
+          Você entrou no painel por <span class="mono">${esc(c.endereco_atual)}</span>, mas
+          as listas M3U e os links de reprodução saem com
+          <span class="mono">${esc(c.content_base_url_em_uso)}</span>.
+          <br><br>
+          Isso acontece quando um domínio novo entra na frente do sistema — configurado
+          aqui, pelo aaPanel ou por outro proxy — ou depois de uma migração de máquina:
+          nada disso mexe nestas configurações sozinho. <b>Nada acusa o problema</b>: o
+          painel abre, o catálogo aparece, e quem descobre é o cliente.
+          <br><br>
+          Trocar agora é o que faz o endereço parar de importar: com o domínio nos links,
+          uma mudança de servidor vira só uma troca de DNS, e <b>nenhum cliente precisa
+          mexer em nada</b>.
+        </p>
+        <div class="grupo-botoes" style="justify-content:flex-start">
+          <button class="btn btn-primario" id="usar-endereco-atual">
+            Passar a entregar ${esc(c.endereco_atual)}
+          </button>
+        </div>
+        <p class="dica" style="margin-top:8px">
+          Os links que os seus clientes já têm <b>continuam funcionando</b> — o endereço
+          antigo não é desligado. Muda o que sai daqui em diante.
+        </p>
+      </div>` : ''}
+
+    <div class="cartao" ${c.endereco_atual_diverge ? '' : 'style="margin-top:0"'}>
       <h2>Endereço público deste servidor</h2>
       <p class="discreto" style="margin:-8px 0 14px">
         É o endereço que aparece nos links de reprodução — o que você cadastra no XC_VM.
@@ -3054,6 +3082,30 @@ async function verConfiguracoes() {
       e.target.disabled = false;
     }
   };
+
+  // Um clique para adotar o endereço pelo qual você entrou.
+  //
+  // Limpa o endereço de conteúdo em vez de repeti-lo: ele existe para quem separa o
+  // domínio do painel do domínio do conteúdo, e vazio significa "use o mesmo". Deixar uma
+  // cópia guardada faria a próxima troca de domínio arrumar um campo e esquecer o outro —
+  // que é exatamente a situação que este botão está desfazendo.
+  const adotar = $('#usar-endereco-atual');
+  if (adotar) adotar.onclick = () => comAcao(async () => {
+    adotar.disabled = true;
+    adotar.textContent = 'Salvando…';
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        corpo: { public_base_url: c.endereco_atual, content_base_url: '' },
+      });
+      aviso('Pronto. As listas e os links passam a entregar ' + c.endereco_atual + '.', 'ok');
+      navegar();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      adotar.disabled = false;
+      adotar.textContent = 'Passar a entregar ' + c.endereco_atual;
+    }
+  });
 
   $('#pw-salvar').onclick = async e => {
     const erro = $('#pw-erro');

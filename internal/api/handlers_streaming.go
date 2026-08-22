@@ -585,6 +585,25 @@ func (s *Server) baseURL(r *http.Request) string {
 	return esquema + "://" + r.Host
 }
 
+// enderecoDaRequisicao devolve o endereço pelo qual esta requisição chegou.
+//
+// Diferente de baseURL: aquele responde "o que o sistema vai usar nos links", este responde
+// "por onde você entrou agora". Quando os dois divergem, quase sempre é porque um domínio
+// novo entrou na frente e ninguém avisou o sistema.
+func (s *Server) enderecoDaRequisicao(r *http.Request) string {
+	if r.Host == "" {
+		return ""
+	}
+	esquema := "http"
+	if r.TLS != nil {
+		esquema = "https"
+	} else if s.deps.TrustProxy && ehLoopback(r.RemoteAddr) &&
+		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		esquema = "https"
+	}
+	return esquema + "://" + r.Host
+}
+
 // enderecoLocal informa se um endereço só funciona dentro da própria máquina.
 func enderecoLocal(base string) bool {
 	b := strings.ToLower(base)
@@ -606,6 +625,18 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	conteudoGuardado, _ := s.deps.Store.GetSetting(r.Context(), store.SettingContentBaseURL, "")
 	conteudoEmUso := s.baseURLConteudo(r)
 
+	// O endereço pelo qual VOCÊ está acessando o painel neste instante.
+	//
+	// Ele é a resposta mais provável para "qual deveria ser o endereço público", e o painel
+	// o oferece com um clique. O motivo é um erro que se repete: configurar um domínio
+	// (aqui, pelo aaPanel, por outro proxy) ou migrar de máquina não toca nestas duas
+	// configurações. O painel passa a abrir pelo domínio, e as listas continuam entregando
+	// o endereço antigo — que depois de uma migração é o IP de uma máquina que pode nem
+	// existir mais.
+	//
+	// Nada acusa: o painel abre, o catálogo aparece, e só o cliente descobre.
+	atual := s.enderecoDaRequisicao(r)
+
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"public_base_url":          guardado,
 		"public_base_url_em_uso":   base,
@@ -614,6 +645,11 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"content_base_url":         conteudoGuardado,
 		"content_base_url_em_uso":  conteudoEmUso,
 		"content_base_url_e_local": enderecoLocal(conteudoEmUso),
+		"endereco_atual":           atual,
+		// Divergente quando o endereço que entrega o conteúdo não é por onde você chegou.
+		// Nem sempre é erro — quem separa o domínio do painel do domínio do conteúdo faz
+		// isso de propósito. Por isso a tela oferece a correção, e não a aplica sozinha.
+		"endereco_atual_diverge": atual != "" && atual != conteudoEmUso && !enderecoLocal(atual),
 	})
 }
 
