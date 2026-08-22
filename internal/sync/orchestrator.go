@@ -315,6 +315,10 @@ type indices struct {
 	// decisões que ele já tomou para ESTA fonte. A sincronização não sai desses dois.
 	principais map[string]int64
 	vinculos   map[string]int64
+	// apelidos são decisões tomadas POR NOME, e não por fonte: valem em qualquer fonte,
+	// inclusive nas que ainda não existiam quando a decisão foi tomada. É o que faz uma
+	// categoria unida não ressurgir como pendência na sincronização seguinte.
+	apelidos map[string]int64
 	// pendentes acumula o que apareceu sem destino, para registrar uma vez só no fim em
 	// vez de a cada item que cair na mesma categoria.
 	pendentes map[string]store.CategoriaPendente
@@ -357,6 +361,10 @@ func (o *Orchestrator) carregarIndices(ctx context.Context, sourceID int64) (*in
 	if err != nil {
 		return nil, err
 	}
+	apelidos, err := o.store.ApelidosCategoria(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &indices{
 		variantes:  variantes,
@@ -365,6 +373,7 @@ func (o *Orchestrator) carregarIndices(ctx context.Context, sourceID int64) (*in
 		categorias: categorias,
 		principais: principais,
 		vinculos:   vinculos,
+		apelidos:   apelidos,
 		pendentes:  map[string]store.CategoriaPendente{},
 	}, nil
 }
@@ -782,6 +791,16 @@ func (o *Orchestrator) categoriaDoItem(_ context.Context, item ingest.Normalized
 	if id, ok := idx.vinculos[chave]; ok {
 		return id, nil
 	}
+	// Apelido antes de principal: o apelido é uma decisão que alguém tomou, e a
+	// equivalência por nome idêntico é um palpite automático. Decisão ganha de palpite.
+	if id, ok := idx.apelidos[chave]; ok {
+		idx.vinculos[chave] = id
+		idx.pendentes[chave] = store.CategoriaPendente{
+			Declarado: item.Category.DeclaredName, Normalizado: nome, ContentType: tipo,
+			SugestaoID: &id,
+		}
+		return id, nil
+	}
 	if id, ok := idx.principais[chave]; ok {
 		// Vínculo automático por nome idêntico: registrado abaixo, no fim da execução.
 		idx.vinculos[chave] = id
@@ -849,6 +868,16 @@ func (o *Orchestrator) aplicarCategorias(ctx context.Context, sourceID int64, ca
 
 		// Já decidida antes: nada a fazer, e não volta a aparecer como pendência.
 		if _, ok := idx.vinculos[chave]; ok {
+			continue
+		}
+		// Apelido: decisão tomada por nome, em qualquer fonte. Vem antes da equivalência
+		// automática por nome idêntico, que é palpite.
+		if id, ok := idx.apelidos[chave]; ok {
+			idx.vinculos[chave] = id
+			if err := o.store.UpsertSourceCategory(ctx, sourceID, c.ExternalID, nome,
+				normalizado, tipo, id); err != nil {
+				return err
+			}
 			continue
 		}
 		// Nome idêntico ao de uma principal: vincula sozinho.

@@ -221,9 +221,11 @@ func (s *Store) AbsorverCategoria(ctx context.Context, origem, destino int64) (i
 	// Tipos diferentes fariam filme aparecer em pasta de série. O banco não impede;
 	// aqui impede.
 	var tipoOrigem, tipoDestino string
+	var nomeOrigem, normalizadoOrigem string
 	var destinoPrincipal bool
 	if err := tx.QueryRow(ctx,
-		`SELECT content_type FROM categories WHERE id = $1`, origem).Scan(&tipoOrigem); err != nil {
+		`SELECT content_type, name, normalized_name FROM categories WHERE id = $1`, origem).
+		Scan(&tipoOrigem, &nomeOrigem, &normalizadoOrigem); err != nil {
 		return 0, wrapErr("unindo categorias: origem", err)
 	}
 	if err := tx.QueryRow(ctx,
@@ -246,10 +248,43 @@ func (s *Store) AbsorverCategoria(ctx context.Context, origem, destino int64) (i
 	}
 	movidos := tag.RowsAffected()
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE source_categories SET category_id = $2 WHERE category_id = $1`,
-		origem, destino); err != nil {
+	// Os vínculos que apontavam para a pasta apagada passam a apontar para o destino — e,
+	// junto com eles, os que ainda não apontavam para nada.
+	//
+	// Essa segunda metade é a que faltava, e é ela que explicava o sintoma: a categoria
+	// que se está unindo normalmente NÃO está vinculada a coisa nenhuma, porque é
+	// exatamente por isso que ela está sendo unida. A linha dela em source_categories tem
+	// category_id nulo, o UPDATE por category_id não a alcançava, e na sincronização
+	// seguinte ela voltava como pendência — a decisão desfeita sozinha.
+	if _, err := tx.Exec(ctx, `
+		UPDATE source_categories SET category_id = $2
+		WHERE category_id = $1
+		   OR (category_id IS NULL AND content_type = $3 AND normalized_name = $4)`,
+		origem, destino, tipoOrigem, normalizadoOrigem); err != nil {
 		return 0, wrapErr("unindo categorias: movendo vínculos", err)
+	}
+
+	// O nome vira apelido: daqui em diante ele cai nesta pasta em QUALQUER fonte,
+	// inclusive nas que ainda não existem. Sem isto a decisão morreria junto com a pasta
+	// apagada, e uma fonte nova declarando o mesmo nome pediria a mesma decisão de novo.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO category_aliases (normalized_name, content_type, category_id, declared_name, origem)
+		VALUES ($1, $2, $3, $4, 'uniao')
+		ON CONFLICT (normalized_name, content_type) DO UPDATE SET
+			category_id   = excluded.category_id,
+			declared_name = excluded.declared_name,
+			origem        = 'uniao'`,
+		normalizadoOrigem, tipoOrigem, destino, nomeOrigem); err != nil {
+		return 0, wrapErr("unindo categorias: guardando o apelido", err)
+	}
+
+	// Um apelido que apontava para a pasta que está sendo apagada seguiria o conteúdo:
+	// senão o ON DELETE CASCADE o levaria junto, e um nome que já tinha destino voltaria
+	// a ficar sem nenhum.
+	if _, err := tx.Exec(ctx,
+		`UPDATE category_aliases SET category_id = $2 WHERE category_id = $1`,
+		origem, destino); err != nil {
+		return 0, wrapErr("unindo categorias: reapontando apelidos", err)
 	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM categories WHERE id = $1`, origem); err != nil {

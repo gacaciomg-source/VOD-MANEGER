@@ -133,10 +133,19 @@ func (s *Server) handleResolverPendencia(w http.ResponseWriter, r *http.Request)
 		s.deps.Log.Warn("vínculo gravado mas o conteúdo não foi movido", "erro", err)
 	}
 
+	// E vale para o NOME, não só para esta fonte. Quem decide "Lançamentos 2024 vai para
+	// Lançamentos" não está falando de uma fonte específica — e repetir a mesma decisão
+	// fonte a fonte, com uma centena de categorias, é o que torna a tela impraticável.
+	outras, err := s.deps.Store.RegistrarApelidoDePendencia(r.Context(), id, destino)
+	if err != nil {
+		s.deps.Log.Warn("vínculo gravado mas o apelido não foi guardado", "erro", err)
+	}
+
 	s.logEvent(r, "catalog", "info",
 		"categoria da fonte vinculada: "+alvo.Declarado, actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"ok": true, "categoria_id": destino, "conteudos_movidos": movidos,
+		"outras_fontes": outras,
 	})
 }
 
@@ -176,5 +185,55 @@ func (s *Server) handleAbsorverCategoria(w http.ResponseWriter, r *http.Request)
 		actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"ok": true, "conteudos_movidos": movidos,
+	})
+}
+
+// Apelidos de categoria: a lista do que foi unido, e o caminho de volta.
+//
+// Unir apaga uma pasta. Sem esta lista, o que foi unido some sem deixar rastro — não dá
+// para conferir o que se decidiu nem para mudar de ideia, e uma ação irreversível que se
+// toma às dezenas é uma armadilha.
+
+func (s *Server) handleListApelidos(w http.ResponseWriter, r *http.Request) {
+	apelidos, err := s.deps.Store.ListarApelidos(r.Context())
+	if err != nil {
+		s.fail(w, r, err, "listando apelidos de categoria")
+		return
+	}
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"apelidos": apelidos})
+}
+
+// handleRemoverApelido solta o nome: ele volta a pedir decisão na próxima sincronização.
+func (s *Server) handleRemoverApelido(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	soltos, err := s.deps.Store.RemoverApelido(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err, "removendo apelido de categoria")
+		return
+	}
+	s.logEvent(r, "catalog", "info", "apelido de categoria removido", actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true, "pendencias": soltos})
+}
+
+// handleReativarApelido devolve o nome à condição de pasta própria e principal.
+func (s *Server) handleReativarApelido(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	categoria, movidos, err := s.deps.Store.ReativarApelido(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err, "reativando apelido de categoria")
+		return
+	}
+	s.logEvent(r, "catalog", "info", fmt.Sprintf(
+		"categoria reativada como principal (%d conteúdo(s) de volta)", movidos), actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
+		"ok": true, "categoria_id": categoria, "conteudos_movidos": movidos,
 	})
 }

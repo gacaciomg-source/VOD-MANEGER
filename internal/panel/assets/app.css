@@ -308,3 +308,33 @@ body.com-barra-sync .visao { padding-bottom: 90px; }
 .lado-duplicata .cartaz { width: 48px; height: 72px; object-fit: cover; border-radius: 4px; }
 .duplicata-versus { align-self: center; color: var(--texto-3); font-size: 12px; }
 .par-duplicata { margin-top: 12px; }
+
+/* ---------- Abas de tipo, com filtro por nome ---------- */
+/*
+ * A tela de Categorias passou de uma lista só para duas — filmes de um lado, séries do
+ * outro. Com mais de cem categorias, a lista única obrigava a rolar por metade do
+ * catálogo para achar a linha certa, e a rolagem voltava ao topo a cada ação.
+ *
+ * As abas ficam grudadas no topo junto com o cabeçalho da página (o .topo é sticky e tem
+ * z-index 5): com a lista longa, o filtro precisa continuar alcançável de qualquer altura,
+ * senão filtrar exige subir até em cima primeiro.
+ */
+.abas {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  position: sticky; top: 61px; z-index: 4; margin: 0 0 4px;
+  padding: 10px 0; background: var(--fundo);
+}
+.aba {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--fundo-2); color: var(--texto-2);
+  border: 1px solid var(--borda); border-radius: 999px;
+  padding: 7px 14px; font-size: 13.5px; cursor: pointer;
+}
+.aba:hover { color: var(--texto); border-color: var(--borda-forte); }
+.aba.ativa {
+  background: rgba(79,157,255,.13); color: var(--acento);
+  border-color: var(--acento); font-weight: 500;
+}
+.aba-num { color: var(--texto-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.aba.ativa .aba-num { color: var(--acento); }
+.busca-abas { flex: 1 1 200px; min-width: 160px; max-width: 320px; margin: 0; }

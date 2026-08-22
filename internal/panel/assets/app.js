@@ -1356,52 +1356,96 @@ async function abrirEpisodio(id) {
 // Tela: Categorias
 // ---------------------------------------------------------------------------
 
+// A tela de Categorias guarda o que você estava olhando.
+//
+// Com mais de cem categorias, cada ação recarregava a tela inteira e devolvia você ao
+// topo da lista — e aí era preciso rolar e procurar de novo a linha seguinte. Unir dez
+// categorias virava dez buscas manuais. O tipo escolhido, o texto do filtro e a posição da
+// rolagem sobrevivem a cada ação, e é isso que transforma a tela numa fila de trabalho.
+const estadoCategorias = { tipo: 'movie', busca: '' };
+
+// recarregarCategorias redesenha sem perder o lugar.
+async function recarregarCategorias() {
+  const y = window.scrollY || document.documentElement.scrollTop || 0;
+  await verCategorias();
+  window.scrollTo(0, y);
+}
+
 async function verCategorias() {
-  const [{ categories }, { pendencias }] = await Promise.all([
+  const [{ categories }, { pendencias }, { apelidos }] = await Promise.all([
     api('/categories'),
     api('/categorias/pendencias'),
+    api('/categorias/apelidos'),
   ]);
 
-  const principais = categories.filter(c => c.principal);
-  const outras = categories.filter(c => !c.principal);
+  const tipo = estadoCategorias.tipo;
+  const doTipo = lista => lista.filter(c => c.content_type === tipo);
 
-  const rotuloTipo = t => t === 'movie' ? 'filmes' : 'séries';
+  // As contagens das abas usam a lista INTEIRA, não a filtrada: a aba precisa dizer o que
+  // existe do outro lado, senão ela não convida a ir lá.
+  const contas = t => ({
+    pendencias: pendencias.filter(p => p.content_type === t).length,
+    categorias: categories.filter(c => c.content_type === t).length,
+  });
+
+  const principais = doTipo(categories).filter(c => c.principal);
+  const outras     = doTipo(categories).filter(c => !c.principal);
+  const unidas     = doTipo(apelidos);
+
+  const aba = (valor, rotulo) => {
+    const n = contas(valor);
+    return `<button class="aba ${tipo === valor ? 'ativa' : ''}" data-aba="${valor}">
+      ${rotulo} <span class="aba-num">${num(n.categorias)}</span>
+      ${n.pendencias ? `<span class="selo">${num(n.pendencias)}</span>` : ''}
+    </button>`;
+  };
+
+  // filtravel marca a linha com o texto pelo qual o campo de busca procura. Buscar no DOM
+  // já desenhado, e não redesenhando a tela, é o que mantém o cursor dentro do campo
+  // enquanto se digita — redesenhar a cada tecla apagaria o campo junto.
+  const filtravel = nome => `data-nome="${esc(nome.toLowerCase())}"`;
 
   $('#visao').innerHTML = `
     <p class="discreto" style="margin:0 0 14px">
       As <b>categorias principais</b> são as pastas que os seus clientes veem. A
       sincronização não cria pasta nenhuma: ela só usa estas, e o que você vincular.
       <br><br>
-      Uma categoria de fonte com nome idêntico ao de uma principal é vinculada sozinha.
-      O que não casa vira <b>pendência</b> — uma decisão que você toma uma vez e vale para
-      sempre, inclusive nas próximas sincronizações.
-      <br><br>
-      <b>A ordem é esta:</b> primeiro marque as principais aqui embaixo. Na sincronização
-      seguinte, as categorias de fonte com o mesmo nome se vinculam sozinhas, e só o que
-      sobrar aparece como pendência para você decidir.
+      <b>Toda decisão aqui vale pelo NOME, não pela fonte.</b> Ao vincular ou unir uma
+      categoria, o nome dela passa a cair naquela pasta em qualquer fonte — inclusive nas
+      que você ainda vai cadastrar. É o que faz a decisão valer para sempre, e o que impede
+      a categoria de voltar como pendência na próxima sincronização.
     </p>
 
-    ${pendencias.length ? `
+    <div class="abas">
+      ${aba('movie', 'Filmes')}
+      ${aba('series', 'Séries')}
+      <input class="busca-abas" id="cat-busca" placeholder="Filtrar por nome…"
+             autocomplete="off" value="${esc(estadoCategorias.busca)}">
+    </div>
+
+    ${pendencias.filter(p => p.content_type === tipo).length ? `
       <div class="cartao" style="margin-top:0;border-color:#4a3a12">
-        <h2>${num(pendencias.length)} categoria(s) esperando decisão</h2>
+        <h2>${num(pendencias.filter(p => p.content_type === tipo).length)} categoria(s) esperando decisão</h2>
         <p class="discreto" style="margin:-8px 0 14px">
           O conteúdo delas continua disponível e reproduzível — só ainda não tem pasta.
+          Decidir uma resolve junto todas as outras fontes que usam o mesmo nome.
         </p>
         <div class="tabela-wrap"><table>
           <thead><tr>
-            <th>Como a fonte chama</th><th>Fonte</th><th>Tipo</th>
+            <th>Como a fonte chama</th><th>Fonte</th>
             <th>Vincular a</th><th style="width:1%"></th>
           </tr></thead>
-          <tbody>${pendencias.map((p, i) => `
-            <tr>
+          <tbody>${pendencias.map((p, i) => ({ p, i }))
+                             .filter(({ p }) => p.content_type === tipo)
+                             .map(({ p, i }) => `
+            <tr ${filtravel(p.declared_name)}>
               <td><b>${esc(p.declared_name)}</b>
                   ${p.sugestao_id ? '<div class="dica">nome idêntico a uma principal</div>' : ''}</td>
               <td class="discreto">${esc(p.source_name)}</td>
-              <td><span class="etiqueta info">${rotuloTipo(p.content_type)}</span></td>
               <td>
                 <select data-destino="${i}" style="min-width:200px">
                   <option value="">— escolha —</option>
-                  ${principais.filter(c => c.content_type === p.content_type).map(c => `
+                  ${principais.map(c => `
                     <option value="${c.id}" ${String(p.sugestao_id) === String(c.id) ? 'selected' : ''}>
                       ${esc(c.name)}</option>`).join('')}
                 </select>
@@ -1417,7 +1461,7 @@ async function verCategorias() {
       <div class="cartao" style="margin-top:0">
         <div class="vazio" style="padding:20px">
           <span class="icone">✅</span>
-          <h3>Nenhuma pendência</h3>
+          <h3>Nenhuma pendência ${tipo === 'movie' ? 'em filmes' : 'em séries'}</h3>
           <p>
             ${principais.length
               ? 'Toda categoria das suas fontes já tem destino definido.'
@@ -1431,12 +1475,11 @@ async function verCategorias() {
     <div class="secao-titulo">Categorias principais (${num(principais.length)})</div>
     ${principais.length ? `<div class="tabela-wrap"><table>
       <thead><tr>
-        <th>Categoria</th><th>Tipo</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
+        <th>Categoria</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
       </tr></thead>
       <tbody>${principais.map(c => `
-        <tr data-id="${c.id}" data-tipo="${c.content_type}">
+        <tr data-id="${c.id}" data-tipo="${c.content_type}" ${filtravel(c.name)}>
           <td><b class="abrir-categoria linha-clicavel">${esc(c.name)}</b></td>
-          <td><span class="etiqueta info">${rotuloTipo(c.content_type)}</span></td>
           <td class="numero">${num(c.content_count)}</td>
           <td><div class="grupo-botoes">
             <button class="btn btn-mini" data-renomear="${c.id}" data-nome="${esc(c.name)}">Renomear</button>
@@ -1445,8 +1488,9 @@ async function verCategorias() {
         </tr>`).join('')}
       </tbody></table></div>`
       : `<div class="cartao"><div class="erro">
-          Nenhuma categoria principal. Seus clientes não veem pasta nenhuma até você
-          marcar pelo menos uma abaixo, ou criar uma a partir de uma pendência.
+          Nenhuma categoria principal de ${tipo === 'movie' ? 'filmes' : 'séries'}. Seus
+          clientes não veem pasta nenhuma até você marcar pelo menos uma abaixo, ou criar
+          uma a partir de uma pendência.
         </div></div>`}
 
     ${outras.length ? `
@@ -1455,24 +1499,24 @@ async function verCategorias() {
         Existem no catálogo mas não são destino de nada — os seus clientes não veem estas
         pastas. Há duas saídas: <b>tornar principal</b>, se a pasta deve aparecer como
         está; ou <b>unir</b> a uma principal, se o conteúdo dela pertence a outra pasta.
-        Unir move o conteúdo e apaga a pasta antiga; nada de acervo se perde.
+        Unir move o conteúdo, apaga a pasta antiga e <b>guarda o nome</b> na lista de
+        categorias unidas, lá embaixo — de onde dá para voltar atrás.
       </p>
       <div class="tabela-wrap"><table>
         <thead><tr>
-          <th>Categoria</th><th>Tipo</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
+          <th>Categoria</th><th class="numero">Conteúdos</th><th style="width:1%"></th>
         </tr></thead>
         <tbody>${outras.map(c => `
-          <tr data-id="${c.id}" data-tipo="${c.content_type}">
+          <tr data-id="${c.id}" data-tipo="${c.content_type}" ${filtravel(c.name)}>
             <td>${esc(c.name)}</td>
-            <td><span class="etiqueta neutro">${rotuloTipo(c.content_type)}</span></td>
             <td class="numero">${num(c.content_count)}</td>
             <td><div class="grupo-botoes">
               <button class="btn btn-mini btn-primario" data-principal="${c.id}"
                       data-valor="true">Tornar principal</button>
-              ${principais.some(pr => pr.content_type === c.content_type) ? `
+              ${principais.length ? `
                 <select data-uniao="${c.id}" style="min-width:170px">
                   <option value="">— unir a… —</option>
-                  ${principais.filter(pr => pr.content_type === c.content_type).map(pr =>
+                  ${principais.map(pr =>
                     `<option value="${pr.id}">${esc(pr.name)}</option>`).join('')}
                 </select>
                 <button class="btn btn-mini" data-unir-cat="${c.id}"
@@ -1480,7 +1524,63 @@ async function verCategorias() {
             </div></td>
           </tr>`).join('')}
         </tbody></table></div>` : ''}
+
+    ${unidas.length ? `
+      <div class="secao-titulo">Categorias unidas (${num(unidas.length)})</div>
+      <p class="discreto" style="margin:-6px 0 10px">
+        Nomes que caem sempre na mesma pasta, <b>em qualquer fonte</b>. Enquanto o nome
+        estiver nesta lista, ele nunca mais volta a pedir decisão — é o que impede a
+        categoria de ressurgir a cada sincronização.
+        <br>
+        <b>Soltar</b> devolve o nome à fila de pendências, para você decidir de novo.
+        <b>Reativar</b> recria a pasta como principal e traz de volta o conteúdo que veio
+        dela.
+      </p>
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Nome da categoria</th><th>Cai em</th><th class="numero">Fontes</th>
+          <th>Desde</th><th style="width:1%"></th>
+        </tr></thead>
+        <tbody>${unidas.map(a => `
+          <tr ${filtravel(a.declared_name + ' ' + a.category_name)}>
+            <td><b>${esc(a.declared_name)}</b>
+                ${a.origem === 'uniao'
+                  ? '<div class="dica">pasta unida</div>'
+                  : '<div class="dica">pendência vinculada</div>'}</td>
+            <td>${esc(a.category_name)}</td>
+            <td class="numero">${num(a.fontes)}</td>
+            <td class="discreto">${esc(a.created_at)}</td>
+            <td><div class="grupo-botoes">
+              <button class="btn btn-mini" data-apelido-reativar="${a.id}"
+                      data-nome="${esc(a.declared_name)}"
+                      data-destino="${esc(a.category_name)}">Reativar</button>
+              <button class="btn btn-mini" data-apelido-soltar="${a.id}"
+                      data-nome="${esc(a.declared_name)}">Soltar</button>
+            </div></td>
+          </tr>`).join('')}
+        </tbody></table></div>` : ''}
   `;
+
+  // Abas.
+  $$('[data-aba]').forEach(b => {
+    b.onclick = () => {
+      estadoCategorias.tipo = b.dataset.aba;
+      window.scrollTo(0, 0);
+      verCategorias();
+    };
+  });
+
+  // Filtro por nome, aplicado sobre o que já está desenhado.
+  const busca = $('#cat-busca');
+  const aplicarFiltro = () => {
+    const termo = busca.value.trim().toLowerCase();
+    estadoCategorias.busca = busca.value;
+    $$('tr[data-nome]').forEach(tr => {
+      tr.hidden = termo !== '' && !tr.dataset.nome.includes(termo);
+    });
+  };
+  busca.oninput = aplicarFiltro;
+  if (estadoCategorias.busca) aplicarFiltro();
 
   // Marcar e desmarcar principal.
   $$('[data-principal]').forEach(b => {
@@ -1490,7 +1590,7 @@ async function verCategorias() {
           method: 'PUT',
           corpo: { principal: b.dataset.valor === 'true' },
         });
-        navegar();
+        recarregarCategorias();
       } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
     });
   });
@@ -1501,10 +1601,12 @@ async function verCategorias() {
     try {
       const r = await api(`/categorias/pendencias/${p.id}/resolver`, { method: 'POST', corpo });
       const movidos = r.conteudos_movidos || 0;
-      aviso(movidos > 0
-        ? `Vinculado. ${num(movidos)} conteúdo(s) movido(s) para a pasta.`
-        : 'Vinculado.', 'ok');
-      navegar();
+      const outrasFontes = r.outras_fontes || 0;
+      const partes = ['Vinculado.'];
+      if (movidos > 0) partes.push(`${num(movidos)} conteúdo(s) movido(s).`);
+      if (outrasFontes > 0) partes.push(`Resolveu junto ${num(outrasFontes)} categoria(s) de outras fontes.`);
+      aviso(partes.join(' '), 'ok');
+      recarregarCategorias();
     } catch (err) {
       aviso('Falha: ' + err.message, 'erro');
       botao.disabled = false;
@@ -1550,7 +1652,8 @@ async function verCategorias() {
       const itens = Number(b.dataset.itens) || 0;
       const ok = await confirmar('Unir categoria',
         `Mover ${num(itens)} conteúdo(s) de "${b.dataset.nome}" para "${nomeDestino}" ` +
-        `e apagar a pasta "${b.dataset.nome}"? O conteúdo não é apagado.`);
+        `e apagar a pasta "${b.dataset.nome}"? O conteúdo não é apagado, e o nome fica ` +
+        'guardado em "Categorias unidas" — dá para voltar atrás.');
       if (!ok) return;
 
       b.disabled = true;
@@ -1559,8 +1662,52 @@ async function verCategorias() {
           method: 'POST',
           corpo: { categoria_id: Number(destino) },
         });
-        aviso(`Unido. ${num(r.conteudos_movidos || 0)} conteúdo(s) movido(s).`, 'ok');
-        navegar();
+        aviso(`Unido. ${num(r.conteudos_movidos || 0)} conteúdo(s) movido(s). ` +
+              `"${b.dataset.nome}" cai em "${nomeDestino}" daqui em diante.`, 'ok');
+        recarregarCategorias();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    });
+  });
+
+  // Soltar um nome: ele volta a pedir decisão.
+  $$('[data-apelido-soltar]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const ok = await confirmar('Soltar o nome',
+        `"${b.dataset.nome}" volta a aparecer como pendência na próxima sincronização, ` +
+        'para você decidir de novo. O conteúdo que já foi movido continua onde está.',
+        'Soltar');
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        await api(`/categorias/apelidos/${b.dataset.apelidoSoltar}`, { method: 'DELETE' });
+        aviso(`"${b.dataset.nome}" voltou a pedir decisão.`, 'ok');
+        recarregarCategorias();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    });
+  });
+
+  // Reativar: a pasta volta a existir, principal, com o conteúdo que veio dela.
+  $$('[data-apelido-reativar]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const ok = await confirmar('Reativar como categoria principal',
+        `"${b.dataset.nome}" volta a ser uma pasta própria e marcada como principal. ` +
+        `O conteúdo que veio dela sai de "${b.dataset.destino}" e volta para ela. ` +
+        'Itens que a fonte parou de declarar nesse nome ficam onde estão.',
+        'Reativar');
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        const r = await api(`/categorias/apelidos/${b.dataset.apelidoReativar}/reativar`,
+          { method: 'POST' });
+        aviso(`"${b.dataset.nome}" voltou como categoria principal. ` +
+              `${num(r.conteudos_movidos || 0)} conteúdo(s) de volta.`, 'ok');
+        recarregarCategorias();
       } catch (err) {
         aviso('Falha: ' + err.message, 'erro');
         b.disabled = false;
