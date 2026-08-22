@@ -52,6 +52,7 @@ var tabelas = []string{
 	"sources",
 	"source_credentials",
 	"categories",
+	"category_aliases",
 	"source_categories",
 	"contents",
 	"seasons",
@@ -59,6 +60,7 @@ var tabelas = []string{
 	"source_variants",
 	"unresolved_items",
 	"match_decisions",
+	"duplicatas_ignoradas",
 	"sync_runs",
 	"stream_credentials",
 	"events",
@@ -70,6 +72,19 @@ var tabelas = []string{
 // sessões que deveriam ter morrido junto com a máquina antiga. `streams` são reproduções
 // em andamento, que por definição não estão em andamento depois de uma migração.
 var efemeras = []string{"sessions", "api_tokens", "streams"}
+
+// TabelasSalvas e TabelasEfemeras expõem as duas listas para a guarda que as compara com
+// o banco de verdade.
+//
+// Existem por causa de um esquecimento concreto: duas migrações criaram tabelas
+// (duplicatas_ignoradas e category_aliases) e ninguém as acrescentou aqui. O backup
+// continuou sendo gerado com sucesso, a restauração continuou passando nos testes, e o
+// estrago só apareceria numa migração de servidor — com as decisões do administrador
+// perdidas em silêncio, que é a única forma de falha que um backup não pode ter.
+//
+// Uma tabela nova agora obriga a uma escolha explícita: ela é salva, ou é efêmera.
+func TabelasSalvas() []string   { return append([]string(nil), tabelas...) }
+func TabelasEfemeras() []string { return append([]string(nil), efemeras...) }
 
 // Manifesto descreve o backup. É o primeiro arquivo do tar, para poder ser lido sem
 // descompactar o resto.

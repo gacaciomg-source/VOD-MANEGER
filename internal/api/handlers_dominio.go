@@ -37,14 +37,47 @@ func (s *Server) handleDominioStatus(w http.ResponseWriter, r *http.Request) {
 	motivo := ""
 	if !disponivel {
 		motivo = "o observador de domínio não está ativo nesta máquina; " +
-			"rode o instalador novamente para habilitá-lo"
+			"atualize o sistema para habilitá-lo"
+	}
+	// Numa máquina com aaPanel, este botão não pode agir — e dizer isso na tela vale muito
+	// mais que deixar a pessoa clicar e receber um erro. O aaPanel traz um nginx próprio
+	// em /www/server/nginx, que já ocupa as portas 80 e 443; instalar o nginx do sistema
+	// por cima colocaria os dois para brigar, e o site que já existe lá poderia cair.
+	if disponivel && temAaPanel() {
+		disponivel = false
+		motivo = "esta máquina tem o aaPanel, que traz um nginx próprio e já ocupa as " +
+			"portas 80 e 443. Configurar o domínio por aqui instalaria um segundo nginx, " +
+			"e os dois brigariam pela mesma porta. O caminho para esta máquina é criar o " +
+			"site pelo aaPanel — veja o bloco pronto para colar logo abaixo."
 	}
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"disponivel":   disponivel,
 		"motivo":       motivo,
 		"em_andamento": dominioEmAndamento(),
 		"registro":     registroDe(registroDominio),
+		"aapanel":      temAaPanel(),
+		"porta_local":  s.portaLocal(),
 	})
+}
+
+// temAaPanel reconhece a instalação do aaPanel pelos caminhos que ela sempre cria.
+func temAaPanel() bool {
+	for _, caminho := range []string{"/www/server/panel", "/www/server/nginx/sbin/nginx"} {
+		if _, err := os.Stat(caminho); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// portaLocal é a porta em que este processo escuta. A tela do aaPanel precisa dela para
+// montar o proxy_pass — errar essa porta é o erro nº 1 de quem segue o guia à mão.
+func (s *Server) portaLocal() string {
+	addr := os.Getenv("VODM_HTTP_ADDR")
+	if i := strings.LastIndex(addr, ":"); i >= 0 && i+1 < len(addr) {
+		return addr[i+1:]
+	}
+	return "8080"
 }
 
 type configurarDominioRequest struct {
@@ -71,15 +104,35 @@ func (s *Server) handleConfigurarDominio(w http.ResponseWriter, r *http.Request)
 		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body", "corpo inválido: "+err.Error())
 		return
 	}
-	dominio := strings.ToLower(strings.TrimSpace(req.Dominio))
-	dominio = strings.TrimPrefix(strings.TrimPrefix(dominio, "https://"), "http://")
-	dominio = strings.TrimSuffix(dominio, "/")
-
-	if !dominioValido.MatchString(dominio) {
+	// Mais de um nome, separados por vírgula.
+	//
+	// O nginx só responde pelo nome EXATO que está no server_name: configurado apenas
+	// `vod.seudominio.com`, digitar `seudominio.com` não abre nada — e o nome curto é
+	// justamente o que se lembra às pressas. O script ainda acrescenta sozinho o domínio
+	// raiz e o www quando eles apontam para esta máquina.
+	nomes := []string{}
+	for _, bruto := range strings.Split(req.Dominio, ",") {
+		nome := strings.ToLower(strings.TrimSpace(bruto))
+		nome = strings.TrimPrefix(strings.TrimPrefix(nome, "https://"), "http://")
+		nome = strings.TrimSuffix(nome, "/")
+		if nome == "" {
+			continue
+		}
+		if !dominioValido.MatchString(nome) {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"informe um domínio como vod.seudominio.com, sem http:// e sem barra", "dominio")
+			return
+		}
+		nomes = append(nomes, nome)
+	}
+	if len(nomes) == 0 {
 		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
 			"informe um domínio como vod.seudominio.com, sem http:// e sem barra", "dominio")
 		return
 	}
+	// O primeiro é o principal: é ele que vira o endereço público e o que aparece nos
+	// links. Os demais são atalhos que levam ao mesmo lugar.
+	dominio := strings.Join(nomes, ",")
 	email := strings.TrimSpace(req.Email)
 	if strings.ContainsAny(email, " \n\t") {
 		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
@@ -95,7 +148,7 @@ func (s *Server) handleConfigurarDominio(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.logEvent(r, "sistema", "warn", "configuração de domínio iniciada: "+dominio, actorOf(r), nil)
+	s.logEvent(r, "sistema", "warn", "configuração de domínio iniciada: "+nomes[0], actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusAccepted, map[string]any{
 		"iniciada": true,
 		"aviso": "A configuração começou. Leva um ou dois minutos: o domínio é conferido, " +

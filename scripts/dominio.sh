@@ -23,7 +23,14 @@
 # antes de entrar, e se o painel parar de responder o script volta atrás sozinho.
 set -euo pipefail
 
-DOMINIO="${1:-}"
+# Um ou mais nomes, separados por vírgula. O primeiro é o principal: é ele que vira o
+# endereço público e o que aparece nos links.
+#
+# Mais de um existe porque o nginx só responde pelo nome EXATO que está no server_name.
+# Configurado apenas `vod.seudominio.com`, digitar `seudominio.com` não abre nada — e o
+# nome curto é justamente o que se lembra às pressas, quando é preciso entrar no painel com
+# urgência.
+ENTRADA="${1:-}"
 EMAIL="${2:-}"
 AMBIENTE=/etc/vodmanager.env
 SITE=/etc/nginx/sites-available/vodmanager
@@ -44,14 +51,26 @@ mkdir -p /opt/vodmanager/runtime
 chown vodmanager:vodmanager /opt/vodmanager/runtime 2>/dev/null || true
 exec > >(tee "$REGISTRO") 2>&1
 chown vodmanager:vodmanager "$REGISTRO" 2>/dev/null || true
-[ -n "$DOMINIO" ] || { erro "informe o domínio."; exit 2; }
+[ -n "$ENTRADA" ] || { erro "informe o domínio."; exit 2; }
 
 # Um domínio malformado produziria uma configuração que o nginx recusa, ou pior, uma que
 # ele aceita e que não corresponde a nada.
-if ! printf '%s' "$DOMINIO" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'; then
-    erro "'$DOMINIO' não parece um domínio válido."
-    exit 2
-fi
+nome_valido() {
+    printf '%s' "$1" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'
+}
+
+PEDIDOS=()
+for nome in ${ENTRADA//,/ }; do
+    nome=$(printf '%s' "$nome" | tr 'A-Z' 'a-z')
+    [ -n "$nome" ] || continue
+    nome_valido "$nome" || { erro "'$nome' não parece um domínio válido."; exit 2; }
+    PEDIDOS+=("$nome")
+done
+[ ${#PEDIDOS[@]} -gt 0 ] || { erro "informe o domínio."; exit 2; }
+
+# DOMINIO continua sendo o principal: o endereço público, os links e a verificação final
+# falam dele. Os outros nomes são atalhos que levam ao mesmo lugar.
+DOMINIO="${PEDIDOS[0]}"
 
 PORTA=$(grep -oP 'VODM_HTTP_ADDR=.*:\K[0-9]+' "$AMBIENTE" 2>/dev/null || echo 8080)
 
@@ -98,10 +117,83 @@ if [ "$IP_DOMINIO" != "$MEU_IP" ]; then
 fi
 ok "$DOMINIO → $MEU_IP"
 
+# Os nomes de atalho.
+#
+# Além dos que foram pedidos, tentamos sozinhos o domínio raiz e o www — são os que a pessoa
+# digita de memória quando precisa entrar às pressas, e não ter pensado neles é o que faz
+# `seudominio.com` não abrir nada enquanto `vod.seudominio.com` abre.
+#
+# Só entra o que APONTA PARA ESTA MÁQUINA. Um nome que resolve para outro lugar (ou que não
+# resolve) faria a emissão do certificado falhar inteira, derrubando junto o nome principal
+# que estava correto — um atalho conveniente não vale esse preço.
+candidatos=("${PEDIDOS[@]}")
+raiz=$(printf '%s' "$DOMINIO" | awk -F. '{ if (NF>2) print $(NF-1)"."$NF; }')
+if [ -n "$raiz" ]; then
+    candidatos+=("$raiz" "www.$raiz")
+fi
+candidatos+=("www.$DOMINIO")
+
+DOMINIOS=()
+IGNORADOS=()
+for nome in "${candidatos[@]}"; do
+    # Sem repetir: certbot recusa a mesma -d duas vezes, e o nginx avisa sobre server_name
+    # duplicado.
+    ja=0
+    for existente in "${DOMINIOS[@]:-}"; do
+        [ "$existente" = "$nome" ] && ja=1 && break
+    done
+    [ "$ja" -eq 1 ] && continue
+
+    ip=$(getent ahostsv4 "$nome" 2>/dev/null | awk '{print $1; exit}' || echo "")
+    if [ "$ip" = "$MEU_IP" ]; then
+        DOMINIOS+=("$nome")
+        [ "$nome" = "$DOMINIO" ] || ok "atalho: $nome → $MEU_IP"
+    else
+        IGNORADOS+=("$nome")
+    fi
+done
+
+for nome in "${IGNORADOS[@]:-}"; do
+    [ -n "$nome" ] || continue
+    # Só vale avisar sobre o que a pessoa PEDIU. Os candidatos automáticos que não existem
+    # são o caso normal, não um problema.
+    for pedido in "${PEDIDOS[@]}"; do
+        if [ "$pedido" = "$nome" ]; then
+            aviso "$nome não aponta para esta máquina; ficou de fora"
+        fi
+    done
+done
+
 # ---------------------------------------------------------------------------
 passo "2/6  Instalando nginx e certbot, se faltarem"
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Um nginx que não é o do sistema já ocupa as portas 80 e 443.
+#
+# É o caso do aaPanel, que compila o próprio nginx em /www/server/nginx e não instala o
+# pacote do apt. Instalar o pacote aqui produziria DOIS nginx na máquina: o novo não subiria
+# (a porta 80 já está tomada), o certbot ajustaria a configuração do que não roda, e o
+# domínio continuaria sem responder — com todos os comandos tendo "dado certo".
+#
+# Pior: o site que já existia no aaPanel poderia cair no meio disso. Então paramos antes, e
+# dizemos onde está o caminho que funciona.
+if [ -d /www/server/panel ] || [ -x /www/server/nginx/sbin/nginx ]; then
+    erro "esta máquina tem o aaPanel, com um nginx próprio em /www/server/nginx.
+
+       Este script instalaria o nginx do sistema por cima, e os dois brigariam pela porta
+       80 — o domínio não responderia, e os sites que já existem no aaPanel poderiam cair.
+
+       O caminho para esta máquina é configurar o domínio PELO aaPanel:
+         Website -> Add site -> (o seu domínio), PHP: Static
+         Website -> o site -> Config file: apontar para http://127.0.0.1:${PORTA}
+         Website -> o site -> SSL -> Let's Encrypt
+
+       O passo a passo, com os três ajustes que o vídeo precisa (sem eles o filme abre e
+       corta depois de alguns minutos), está em docs/16-hospedar-pelo-aapanel.md."
+    exit 1
+fi
+
 if ! command -v nginx >/dev/null || ! command -v certbot >/dev/null; then
     apt-get update -qq
     apt-get install -y -qq nginx certbot python3-certbot-nginx >/dev/null
@@ -127,7 +219,7 @@ cat > "$SITE" <<NGINX
 # Gerado pelo VOD Manager. Alterações à mão são substituídas na próxima execução.
 server {
     listen 80;
-    server_name ${DOMINIO};
+    server_name ${DOMINIOS[*]};
 
     location / {
         proxy_pass http://127.0.0.1:${PORTA};
@@ -170,8 +262,15 @@ else
     REGISTRO_EMAIL="--email $EMAIL"
 fi
 
+# Um -d por nome: o certificado precisa cobrir todos, senão o navegador recusa o atalho com
+# um aviso de segurança — pior que o atalho não existir.
+ALVOS=()
+for nome in "${DOMINIOS[@]}"; do
+    ALVOS+=(-d "$nome")
+done
+
 # --nginx ajusta o próprio site para 443 e redireciona o 80.
-if certbot --nginx -d "$DOMINIO" --non-interactive --agree-tos $REGISTRO_EMAIL --redirect >/dev/null 2>&1; then
+if certbot --nginx "${ALVOS[@]}" --non-interactive --agree-tos $REGISTRO_EMAIL --redirect >/dev/null 2>&1; then
     ok "HTTPS ativo em https://${DOMINIO}"
     ESQUEMA=https
 else
@@ -242,6 +341,7 @@ cat <<FIM
 $(ok "Domínio configurado.")
 
   Painel e conteúdo ..... ${ESQUEMA}://${DOMINIO}
+  Também respondem por .. ${DOMINIOS[*]}
   Acesso pelo IP ........ continua funcionando na porta ${PORTA}
 
 A porta ${PORTA} foi deixada ABERTA de propósito: os links que os seus clientes já têm

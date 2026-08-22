@@ -169,11 +169,69 @@ UNIT
     systemctl enable --now --quiet vodmanager-migrar.path
 }
 
+# vodm_outro_firewall_manda diz se outro programa já é o dono do firewall desta máquina.
+#
+# O aaPanel e o firewalld gerenciam as regras por conta própria. Ligar o ufw por cima
+# significa trocar o conjunto de regras inteiro pelo nosso — e o nosso só conhece o SSH e a
+# porta da aplicação.
+vodm_outro_firewall_manda() {
+    [ -d /www/server/panel ] && return 0
+    systemctl is-active --quiet firewalld 2>/dev/null && return 0
+    return 1
+}
+
+# vodm_portas_expostas lista as portas TCP que hoje escutam para fora.
+#
+# Serve para não cortar nada ao ligar o ufw pela primeira vez. Só as que escutam em todas as
+# interfaces entram: uma porta em 127.0.0.1 (o Postgres, por exemplo) não é alcançável de
+# fora e não tem por que ser aberta.
+vodm_portas_expostas() {
+    ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -E '^(0\.0\.0\.0|\[::\]|\*):' \
+        | sed 's/.*://' \
+        | sort -un
+}
+
 # vodm_firewall libera o SSH e a porta da aplicação.
+#
+# # Por que este trecho tem tanto cuidado
+#
+# Ligar o ufw numa máquina que já servia outras coisas é a maneira mais fácil de derrubar o
+# que estava funcionando: o ufw entra com "negar tudo o que não foi listado", e a lista era
+# só SSH e a porta da aplicação. Numa VPS com aaPanel, isso fecha de uma vez as portas 80 e
+# 443 dos sites hospedados e a porta do próprio painel — inclusive a que a pessoa usaria
+# para reabrir. O comando termina com sucesso, e o estrago só aparece quando alguém tenta
+# acessar.
+#
+# Então: se outro programa manda no firewall, não encostamos nele. E, quando somos nós a
+# ligar o ufw pela primeira vez, o que já estava exposto continua exposto.
 vodm_firewall() {
-    local porta="$1"
+    local porta="$1" p
+
+    local ativo=0
+    ufw status 2>/dev/null | grep -q "Status: active" && ativo=1
+
+    if [ "$ativo" -eq 0 ] && vodm_outro_firewall_manda; then
+        echo "    outro programa (aaPanel ou firewalld) gerencia o firewall desta máquina;"
+        echo "    o ufw não foi ligado. Libere a porta ${porta}/tcp por lá."
+        return 0
+    fi
+
     ufw allow OpenSSH >/dev/null 2>&1 || true
     ufw allow "${porta}/tcp" >/dev/null 2>&1 || true
+    # 80 e 443 entram desde já: no dia em que um domínio for configurado, elas passam a ser
+    # o caminho principal — e descobrir que estavam fechadas com o certificado já emitido
+    # é uma depuração cara por um motivo bobo.
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 443/tcp >/dev/null 2>&1 || true
+
+    if [ "$ativo" -eq 0 ]; then
+        for p in $(vodm_portas_expostas); do
+            ufw allow "${p}/tcp" >/dev/null 2>&1 || true
+        done
+    fi
+
     ufw --force enable >/dev/null 2>&1 || true
 }
 

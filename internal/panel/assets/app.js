@@ -2406,6 +2406,56 @@ async function verSistema() {
   agendarAtualizacao('sistema', 5000);
 }
 
+// blocoAaPanel entrega o que fazer numa máquina onde o botão não pode agir.
+//
+// O aaPanel traz um nginx próprio, que já ocupa as portas 80 e 443. Um botão desligado com
+// a explicação certa é honesto; um botão desligado e nada mais deixa a pessoa sem saída. As
+// linhas abaixo são a saída — e o motivo de elas estarem aqui, e não só na documentação, é
+// que as três do meio somem quando o aaPanel regenera a configuração do site, e o sintoma
+// (o filme abre e corta depois de alguns minutos) não sugere a causa em nada.
+function blocoAaPanel(porta) {
+  const conf =
+`location / {
+    proxy_pass http://127.0.0.1:${porta || 8080};
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Sem estas três linhas o vídeo abre e corta depois de alguns minutos.
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    client_max_body_size 0;
+}`;
+
+  return `
+    <div class="veredito alerta" style="margin:0 0 12px">
+      <b>Esta máquina tem o aaPanel.</b>
+      Ele traz um nginx próprio, que já responde pelas portas 80 e 443 — então quem
+      configura o domínio aqui é ele, não este botão.
+      <br><br>
+      No aaPanel: <b>Website → Add site</b> com o seu domínio e <b>PHP: Static</b>. Depois
+      <b>Website → o site → Config file</b> e cole o bloco abaixo dentro do
+      <span class="mono">server { }</span>, no lugar do <span class="mono">location /</span>
+      que existir. Por fim <b>SSL → Let's Encrypt → Apply</b>.
+      <br><br>
+      Se houver um campo <b>Custom config</b> para o site, prefira colar lá: esse campo
+      costuma sobreviver quando o aaPanel regenera o arquivo principal.
+    </div>
+    <textarea class="mono" rows="16" readonly style="font-size:12px">${esc(conf)}</textarea>
+    <div class="grupo-botoes" style="justify-content:flex-start;margin:8px 0 4px">
+      <button class="btn btn-mini" data-copiar-nginx="1">Copiar o bloco</button>
+    </div>
+    <p class="dica" style="margin-bottom:14px">
+      <b>Guarde este bloco.</b> Se um dia o vídeo começar a cortar depois de alguns minutos,
+      volte ao Config file e confira se as linhas continuam lá — o aaPanel pode tê-las
+      apagado ao regenerar a configuração, e esse é o sintoma exato.
+    </p>`;
+}
+
 // desenharDominio monta a seção de domínio e HTTPS.
 async function desenharDominio() {
   const area = $('#area-dominio');
@@ -2444,6 +2494,7 @@ async function desenharDominio() {
       clientes já têm apontam para ele, e derrubá-los de uma vez seria o pior jeito de
       migrar.
     </p>
+    ${d.aapanel ? blocoAaPanel(d.porta_local) : ''}
     ${d.disponivel ? `
       <label>Domínio
         <input id="dom-nome" placeholder="vod.seudominio.com" autocomplete="off">
@@ -2456,6 +2507,13 @@ async function desenharDominio() {
         máquina. O sistema confere isso primeiro e avisa se ainda não propagou — sem isso
         o certificado não é emitido.
         <br>
+        <b>Pode informar mais de um nome</b>, separados por vírgula — o primeiro é o
+        principal, o que aparece nos links. Os outros viram atalhos para o mesmo painel.
+        O domínio raiz e o <span class="mono">www</span> são tentados sozinhos: se
+        apontarem para esta máquina, entram junto. É o que faz digitar só
+        <span class="mono">seudominio.com</span> abrir o painel — o nginx responde apenas
+        pelos nomes exatos que conhece.
+        <br>
         O e-mail recebe o aviso quando a renovação automática do certificado falhar. Sem
         ele, ninguém é avisado.
       </p>
@@ -2465,6 +2523,10 @@ async function desenharDominio() {
       </div>`
     : `<div class="erro">${esc(d.motivo)}</div>`}
     ${registro}`;
+
+  $$('[data-copiar-nginx]').forEach(b => {
+    b.onclick = () => copiar(area.querySelector('textarea.mono').value, b);
+  });
 
   const botao = $('#dom-aplicar');
   if (!botao) return;
