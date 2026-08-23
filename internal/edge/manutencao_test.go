@@ -11,7 +11,7 @@ import (
 // no lugar do filme. Para o proxy isso é sucesso, e o failover — que existe para trocar de
 // origem quando uma falha — nunca é acionado.
 func TestDeteccaoDeVideoDeManutencao(t *testing.T) {
-	const limiar = 20 << 20
+	const limiar = 100 << 20
 
 	casos := []struct {
 		nome     string
@@ -19,8 +19,8 @@ func TestDeteccaoDeVideoDeManutencao(t *testing.T) {
 		suspeito bool
 	}{
 		{
-			nome:     "aviso de manutenção de poucos megabytes",
-			resp:     &http.Response{StatusCode: 200, ContentLength: 2 << 20, Header: http.Header{}},
+			nome:     "aviso de manutenção em alta definição (40 MB)",
+			resp:     &http.Response{StatusCode: 200, ContentLength: 40 << 20, Header: http.Header{}},
 			suspeito: true,
 		},
 		{
