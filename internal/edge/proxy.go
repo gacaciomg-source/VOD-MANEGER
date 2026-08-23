@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
+	"vodmanager/internal/auth"
 	"vodmanager/internal/ingest"
 	"vodmanager/internal/store"
 )
@@ -42,6 +42,9 @@ type Proxy struct {
 	nodeID   string
 	http     *http.Client
 	conexoes *ContadorConexoes
+	// tamanhoMinimo e o piso abaixo do qual uma resposta e tratada como aviso de
+	// manutencao em vez de conteudo. Zero desliga a deteccao.
+	tamanhoMinimo int64
 	// contabilidade acumula usos e bytes por credencial fora do caminho dos bytes.
 	contabilidade *Contabilidade
 }
@@ -57,6 +60,9 @@ type Options struct {
 	Resolver Resolver
 	Log      *slog.Logger
 	NodeID   string
+	// TamanhoMinimoDeVideo: abaixo disso a resposta e tratada como aviso de manutencao.
+	// Zero usa o padrao; negativo desliga.
+	TamanhoMinimoDeVideo int64
 }
 
 // New cria o proxy.
@@ -68,6 +74,7 @@ func New(opts Options) *Proxy {
 		log:           opts.Log,
 		nodeID:        opts.NodeID,
 		conexoes:      NovoContadorConexoes(),
+		tamanhoMinimo: minimoOuPadrao(opts.TamanhoMinimoDeVideo),
 		contabilidade: NovaContabilidade(opts.Store, opts.Log),
 		http: &http.Client{
 			// SEM prazo total: um filme leva horas para ser transmitido. O que protege
@@ -168,6 +175,34 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 				"variant_id", v.ID, "fonte", v.SourceName, "erro", err)
 			continue
 		}
+
+		// Fonte em manutenção devolve um aviso de dez segundos, com HTTP 200.
+		//
+		// Nada falhou, então o failover nunca seria acionado: o espectador veria o aviso,
+		// o "filme" acabaria, e a segunda fonte — que tem o conteúdo de verdade — ficaria
+		// sem ser tentada. O tamanho anunciado denuncia isso ANTES do primeiro byte, que é
+		// o último momento em que ainda dá para trocar de origem.
+		if total, suspeito := pareceVideoDeManutencao(origem, p.tamanhoMinimo); suspeito {
+			// A última origem é servida MESMO ASSIM.
+			//
+			// Dez segundos de aviso são ruins; nada é pior. E o palpite pode estar errado
+			// — um episódio curto de verdade existe. Diante da dúvida, com nada melhor
+			// para oferecer, entregamos o que há.
+			if temOutraOrigemParaTentar(ped.variantes, i, tentativas) {
+				origem.Body.Close()
+				cancelarOrigem()
+				ultimoErro = fmt.Errorf(
+					"a fonte %s devolveu %d bytes, curto demais para um vídeo — provável aviso de manutenção",
+					v.SourceName, total)
+				p.log.Warn("origem devolveu vídeo curto demais; provável manutenção",
+					"variant_id", v.ID, "fonte", v.SourceName,
+					"bytes_anunciados", total, "minimo", p.tamanhoMinimo)
+				continue
+			}
+			p.log.Warn("vídeo curto demais, mas é a última origem disponível; servindo assim mesmo",
+				"variant_id", v.ID, "fonte", v.SourceName, "bytes_anunciados", total)
+		}
+
 		usada, resp, cancelar = v, origem, cancelarOrigem
 		break
 	}
@@ -379,22 +414,16 @@ func redigir(err error) error {
 // sozinho, e a porta da aplicação continua aberta ao mundo de propósito. Sem a exigência
 // do loopback, qualquer pessoa escolheria o IP com que aparece, e o limite de telas
 // simultâneas por credencial deixaria de significar coisa alguma.
+// Uma implementação só, em internal/auth.
+//
+// Havia duas cópias desta regra — uma aqui, outra lá — e elas precisavam concordar sobre
+// qual endereço do X-Forwarded-For usar. Não concordar significaria a restrição por faixa
+// de IP de uma credencial julgar por um endereço e o limite de reproduções contar por
+// outro: dois comportamentos incoerentes que ninguém conseguiria explicar.
+//
+// Duas cópias de uma regra de segurança é uma cópia demais.
 func clientIP(r *http.Request, confiarProxy bool) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if confiarProxy {
-		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				primeiro, _, _ := strings.Cut(xff, ",")
-				if v := strings.TrimSpace(primeiro); v != "" {
-					return v
-				}
-			}
-		}
-	}
-	return host
+	return auth.ClientIP(r, confiarProxy)
 }
 
 // ClientIP expõe a extração do IP do cliente para os outros planos de dados (a saída

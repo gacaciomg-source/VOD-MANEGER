@@ -52,6 +52,12 @@ type Config struct {
 	// quando há proxy reverso na frente, para montar os links que vão para o XC_VM.
 	PublicBaseURL string
 
+	// VideoMinimoMB e o tamanho abaixo do qual uma resposta da fonte e tratada como aviso
+	// de manutencao em vez de conteudo, e a proxima origem e tentada.
+	//
+	// 0 usa o padrao (20 MB). -1 desliga a deteccao.
+	VideoMinimoMB int
+
 	// Bootstrap do primeiro administrador
 	BootstrapAdminUsername string
 	BootstrapAdminPassword string
@@ -87,6 +93,8 @@ func LoadFrom(get Getenv) (*Config, error) {
 		LoginWindow:      l.duration("LOGIN_WINDOW", 15*time.Minute),
 		TrustProxy:       l.boolean("TRUST_PROXY", false),
 		PublicBaseURL:    l.str("PUBLIC_BASE_URL", ""),
+
+		VideoMinimoMB: l.intRange("VIDEO_MINIMO_MB", 0, -1, 100000),
 
 		BootstrapAdminUsername: l.str("BOOTSTRAP_ADMIN_USERNAME", "admin"),
 		BootstrapAdminPassword: l.str("BOOTSTRAP_ADMIN_PASSWORD", ""),
