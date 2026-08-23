@@ -111,15 +111,49 @@ func ClientIP(r *http.Request, trustProxy bool) string {
 	//
 	// Exigir que o vizinho imediato seja o loopback fecha isso sem custo nenhum: o nginx
 	// fala de 127.0.0.1, e quem chega direto na porta não fala.
+	//
+	// # E qual valor do cabeçalho usar
+	//
+	// A escolha entre o PRIMEIRO e o ÚLTIMO endereço do X-Forwarded-For decide se a trava
+	// acima serve para alguma coisa.
+	//
+	// O nginx acrescenta ao cabeçalho em vez de substituí-lo: ele monta
+	// "<o que o cliente mandou>, <quem de fato conectou>". Então o primeiro endereço da
+	// lista é TEXTO ESCOLHIDO PELO CLIENTE, e o último é o que o nginx observou.
+	//
+	// Pegar o primeiro tornava a exigência do loopback decorativa: bastava o cliente
+	// enviar um X-Forwarded-For próprio para aparecer com o IP que quisesse — furando a
+	// restrição por faixa de IP das credenciais e envenenando o registro de reproduções.
+	//
+	// X-Real-IP vem antes porque o nginx o SOBRESCREVE com o endereço observado. É o único
+	// dos dois que o cliente não consegue influenciar de forma alguma.
 	if trustProxy && ehLoopback(host) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first, _, _ := strings.Cut(xff, ",")
-			if ip := strings.TrimSpace(first); ip != "" {
-				return ip
-			}
+		if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
+			return real
+		}
+		if ip := ultimoEnderecoDe(r.Header.Get("X-Forwarded-For")); ip != "" {
+			return ip
 		}
 	}
 	return host
+}
+
+// ultimoEnderecoDe devolve o último endereço de uma lista X-Forwarded-For.
+//
+// O último é o que o proxy da própria máquina acrescentou — o único da lista que não veio
+// do cliente. Os anteriores podem ser verdadeiros, e podem ser inventados; não há como
+// distinguir, e por isso não são usados.
+func ultimoEnderecoDe(cabecalho string) string {
+	if cabecalho == "" {
+		return ""
+	}
+	partes := strings.Split(cabecalho, ",")
+	for i := len(partes) - 1; i >= 0; i-- {
+		if v := strings.TrimSpace(partes[i]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ehLoopback informa se o endereço é a própria máquina.

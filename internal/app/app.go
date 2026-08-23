@@ -149,6 +149,9 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			Resolver: scheduler.Orchestrator(),
 			Log:      log,
 			NodeID:   cfg.NodeID,
+			// Em MB na configuracao, em bytes no codigo: ninguem escreve 20971520 num
+			// arquivo de ambiente sem errar um zero.
+			TamanhoMinimoDeVideo: int64(cfg.VideoMinimoMB) << 20,
 		})
 		// O consumo por credencial fica acumulado em memória entre as descargas; sem
 		// isto, os últimos segundos de contagem se perderiam a cada desligamento.
