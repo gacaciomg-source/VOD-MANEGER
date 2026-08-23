@@ -132,3 +132,115 @@ func TestEscritaBemSucedidaNaoMarcaFalha(t *testing.T) {
 		t.Error("marcou falha numa escrita bem-sucedida")
 	}
 }
+
+// leitorQueParaNoMeio entrega alguns bytes e depois emudece para sempre.
+//
+// É a fonte que engasga sob carga: ela responde, começa a enviar, e simplesmente para. Do
+// lado do espectador o filme congela; do lado do servidor a conexão fica presa.
+type leitorQueParaNoMeio struct {
+	ctx      context.Context
+	restante int
+}
+
+func (l *leitorQueParaNoMeio) Read(p []byte) (int, error) {
+	if l.restante > 0 {
+		n := len(p)
+		if n > l.restante {
+			n = l.restante
+		}
+		for i := range p[:n] {
+			p[i] = 'v'
+		}
+		l.restante -= n
+		return n, nil
+	}
+	<-l.ctx.Done()
+	return 0, l.ctx.Err()
+}
+
+// TestVigiaCortaFonteQueParaNoMeio é a guarda do defeito que travava reproduções.
+//
+// O vigia cobria só o primeiro byte. Depois dele, uma fonte que enviasse um byte e
+// travasse deixava a conexão presa PARA SEMPRE — segurando uma vaga do limite da
+// credencial e uma conexão na fonte.
+//
+// O estrago não ficava no espectador que travou: as vagas presas se acumulavam até encher
+// o limite da credencial, e daí o cliente INTEIRO passava a receber "limite de reproduções
+// atingido". O player, diante disso, reinicia do começo — e o relato que chega não é "um
+// filme travou", é "os vídeos reiniciam sozinhos depois de um tempo".
+func TestVigiaCortaFonteQueParaNoMeio(t *testing.T) {
+	original := prazoSemDadosParaTeste(50 * time.Millisecond)
+	defer prazoSemDadosParaTeste(original)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	fonte := &leitorQueParaNoMeio{ctx: ctx, restante: 1024}
+	corpo, parar, travou := vigiar(fonte, cancelar, nil)
+	defer parar()
+
+	inicio := time.Now()
+	n, err := io.Copy(io.Discard, corpo)
+
+	if n != 1024 {
+		t.Errorf("bytes entregues = %d, esperava 1024", n)
+	}
+	if err == nil {
+		t.Fatal("a leitura deveria ter sido cortada depois de a fonte emudecer")
+	}
+	if !travou() {
+		t.Error("o corte precisa ser identificado como falha da fonte, não do cliente")
+	}
+	if decorrido := time.Since(inicio); decorrido > 2*time.Second {
+		t.Errorf("demorou %s para cortar; o prazo era 50ms", decorrido)
+	}
+}
+
+// TestVigiaNaoCortaClientePausado é o contrapeso do teste acima.
+//
+// Com o player pausado, o cliente para de aceitar bytes, a escrita bloqueia, e a leitura na
+// fonte para junto. Do lado de fora é IDÊNTICO a uma fonte travada — e cortar aí derrubaria
+// quem só apertou pause.
+//
+// A diferença está em onde a cópia está parada: pausado, ela está bloqueada escrevendo para
+// o cliente. É isso que o vigia consulta antes de cortar.
+func TestVigiaNaoCortaClientePausado(t *testing.T) {
+	original := prazoSemDadosParaTeste(30 * time.Millisecond)
+	defer prazoSemDadosParaTeste(original)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	defer cancelar()
+
+	fonte := &leitorQueParaNoMeio{ctx: ctx, restante: 512}
+	// O escritor está sempre "no meio de uma escrita": é o player pausado.
+	pausado := func() bool { return true }
+	corpo, parar, travou := vigiar(fonte, cancelar, pausado)
+	defer parar()
+
+	// Lê o que a fonte tem e depois espera bem mais que o prazo. Nada pode ser cortado.
+	lido, _ := io.ReadAll(io.LimitReader(corpo, 512))
+	if len(lido) != 512 {
+		t.Fatalf("leu %d bytes, esperava 512", len(lido))
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	if travou() {
+		t.Fatal("o vigia cortou um cliente pausado; ele só pode cortar fonte parada")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("o contexto foi cancelado com o cliente apenas pausado")
+	}
+}
+
+// TestVigiaPararEncerraARonda: a ronda não pode sobreviver à requisição.
+//
+// Uma goroutine por reprodução que nunca termina é vazamento — e num servidor de vídeo isso
+// se acumula depressa.
+func TestVigiaPararEncerraARonda(t *testing.T) {
+	_, cancelar := context.WithCancel(context.Background())
+	defer cancelar()
+
+	_, parar, _ := vigiar(strings.NewReader("conteudo"), cancelar, nil)
+	parar()
+	// Parar duas vezes não pode entrar em pânico: o caminho de erro chama o defer e o
+	// caminho normal chama explicitamente.
+	parar()
+}

@@ -225,10 +225,15 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	// custo de memória por cliente.
 	// Vigia do primeiro byte: uma fonte que aceita a conexão e nunca envia nada deixaria
 	// a reprodução presa para sempre, segurando vaga na credencial e conexão na origem.
-	corpo, pararVigia, fonteTravou := vigiarPrimeiroByte(resp.Body, cancelar)
+	// O escritor vem ANTES do vigia porque o vigia consulta o escritor.
+	//
+	// É o que distingue um player pausado — a cópia parada esperando o cliente aceitar
+	// bytes — de uma fonte que morreu no meio. Sem essa consulta, um filme pausado por
+	// dois minutos seria cortado como se a fonte tivesse travado.
+	destino := &escritorDoCliente{destino: w}
+	corpo, pararVigia, fonteTravou := vigiar(resp.Body, cancelar, destino.EsperandoCliente)
 	defer pararVigia()
 
-	destino := &escritorDoCliente{destino: w}
 	buf := make([]byte, bufferCopia)
 	enviados, errCopia := io.CopyBuffer(destino, corpo, buf)
 
@@ -237,11 +242,23 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		// Cliente que fecha o player no meio é o caso mais comum e não é falha nossa.
 		switch {
 		case fonteTravou():
-			// Fomos nós que cortamos: a fonte aceitou a conexão e não enviou nada.
-			estado, codigoErro = "error", "fonte_nao_enviou_dados"
-			p.log.Warn("fonte aceitou a conexão e não enviou nada",
-				"variant_id", usada.ID, "fonte", usada.SourceName,
-				"prazo", prazoPrimeiroByte.String())
+			// Fomos nós que cortamos: a fonte parou de enviar.
+			//
+			// Os dois casos ficam separados no código de erro porque pedem coisas
+			// diferentes de quem for olhar. Nunca começar costuma ser credencial ou link
+			// morto — problema de cadastro. Parar no meio é a fonte engasgando sob carga,
+			// e aparece em rajadas no mesmo horário.
+			if enviados > 0 {
+				estado, codigoErro = "error", "fonte_parou_no_meio"
+				p.log.Warn("a fonte parou de enviar no meio da transmissão",
+					"variant_id", usada.ID, "fonte", usada.SourceName,
+					"bytes", enviados, "prazo", prazoSemDados.String())
+			} else {
+				estado, codigoErro = "error", "fonte_nao_enviou_dados"
+				p.log.Warn("fonte aceitou a conexão e não enviou nada",
+					"variant_id", usada.ID, "fonte", usada.SourceName,
+					"prazo", prazoPrimeiroByte.String())
+			}
 		case destino.falhou, errors.Is(errCopia, context.Canceled), r.Context().Err() != nil:
 			// A falha foi ao escrever PARA o cliente: ele fechou o player ou deu seek.
 			// É o comportamento normal de quem assiste, não uma falha de entrega.
