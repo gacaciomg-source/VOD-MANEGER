@@ -37,10 +37,28 @@ import (
 
 // tamanhoMinimoPadrao é o piso abaixo do qual uma resposta é tratada como aviso.
 //
-// 20 MB é folgado de propósito. Um vídeo de manutenção fica em 1 a 5 MB; o episódio mais
-// curto e mais comprimido de um catálogo real passa bem disso. O limiar existe para pegar o
-// caso evidente, não para adivinhar o duvidoso.
-const tamanhoMinimoPadrao int64 = 20 << 20
+// # Por que 100 MB, e não um número menor
+//
+// "Vídeo de manutenção" faz pensar em algo minúsculo, e nem sempre é: um aviso de dez
+// segundos gravado em alta definição passa fácil dos 20 MB. Um limiar baixo demais não pega
+// o caso que existe de verdade — e um limiar que não pega nada é pior que não ter.
+//
+// # O que se arrisca subindo
+//
+// Conteúdo legítimo abaixo do limiar passa a ser pulado. Episódio curto e muito comprimido
+// — meia hora de desenho em 480p — chega perto dos 100 MB.
+//
+// O estrago disso é pequeno, e é de propósito: pular não é recusar. A próxima origem é
+// tentada, e se TODAS forem pequenas a última é servida assim mesmo. O custo real de um
+// palpite errado são alguns segundos a mais até o primeiro byte, e não um filme que não
+// abre.
+//
+// É essa assimetria que permite um limiar generoso: errar para mais custa latência, errar
+// para menos custa o espectador vendo dez segundos de aviso e achando que o filme acabou.
+//
+// Ajustável por VODM_VIDEO_MINIMO_MB. O registro anota `bytes_anunciados` a cada recusa —
+// é por ele que se descobre o tamanho real do aviso de cada fonte e se afina o número.
+const tamanhoMinimoPadrao int64 = 100 << 20
 
 // tamanhoTotalDaMidia lê o tamanho do ARQUIVO INTEIRO anunciado pela fonte.
 //
