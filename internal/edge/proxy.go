@@ -38,6 +38,9 @@ type Proxy struct {
 	store    *store.Store
 	auth     *Authenticator
 	resolver Resolver
+	// acervo e nulo quando este processo nao guarda midia. Nulo significa "sempre a
+	// fonte", que e o comportamento de sempre.
+	acervo   Acervo
 	log      *slog.Logger
 	nodeID   string
 	http     *http.Client
@@ -55,6 +58,7 @@ type Options struct {
 	Store    *store.Store
 	Auth     *Authenticator
 	Resolver Resolver
+	Acervo   Acervo
 	Log      *slog.Logger
 	NodeID   string
 }
@@ -65,6 +69,7 @@ func New(opts Options) *Proxy {
 		store:         opts.Store,
 		auth:          opts.Auth,
 		resolver:      opts.Resolver,
+		acervo:        opts.Acervo,
 		log:           opts.Log,
 		nodeID:        opts.NodeID,
 		conexoes:      NovoContadorConexoes(),
@@ -114,6 +119,28 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	if len(ped.variantes) == 0 {
 		http.Error(w, "nenhuma origem disponível para este conteúdo", http.StatusNotFound)
 		return
+	}
+
+	// O acervo vem antes da fonte.
+	//
+	// A consulta é um índice parcial e uma linha — barata o bastante para caber no caminho
+	// do primeiro byte. Se houver cópia pronta e o armazenamento responder, o vídeo sai
+	// daqui e a fonte nem é procurada.
+	//
+	// Qualquer problema devolve `false` ANTES de escrever para o cliente, e o fluxo segue
+	// para a fonte como sempre fez. É a garantia que torna ligar o acervo uma decisão sem
+	// risco: no pior caso ele não ajuda; em caso nenhum ele atrapalha.
+	if p.acervo != nil {
+		for i := range ped.variantes {
+			arquivo := p.acervo.CopiaPronta(r.Context(), ped.variantes[i].ID)
+			if arquivo == nil {
+				continue
+			}
+			if p.servirDoAcervo(w, r, ped, arquivo, inicio) {
+				return
+			}
+			break
+		}
 	}
 
 	streamID, err := p.abrirSessao(r, ped)
@@ -230,6 +257,18 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	// Consumo da credencial: acumulado em memória e gravado em lote. É o que alimenta
 	// as colunas de usos e transferido no painel.
 	p.contabilidade.Registrar(ped.credID, enviados)
+
+	// A cópia é enfileirada DEPOIS da entrega, e só quando ela deu certo.
+	//
+	// Depois, porque enfileirar antes atrasaria o primeiro byte por uma decisão que não
+	// interessa a quem está esperando o filme começar. E só quando deu certo, porque
+	// guardar uma cópia de uma origem que acabou de falhar seria guardar o defeito.
+	//
+	// O contexto é o de fundo, não o da requisição: este já foi cancelado quando o cliente
+	// fechou o player, e usá-lo faria a fila nunca receber nada de quem assiste até o fim.
+	if p.acervo != nil && estado == "closed" && enviados > 0 {
+		p.acervo.TalvezGuardar(context.WithoutCancel(r.Context()), usada, ped.alvo)
+	}
 
 	p.log.Info("stream concluído",
 		"content_id", ped.alvo.ContentID, "fonte", usada.SourceName,
