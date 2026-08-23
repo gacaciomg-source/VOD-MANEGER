@@ -24,6 +24,7 @@ type createSourceRequest struct {
 	MaxBandwidthBPS        *int64   `json:"max_bandwidth_bps"`
 	AllowedCategories      []string `json:"allowed_categories"`
 	IgnoredCategories      []string `json:"ignored_categories"`
+	CacheHabilitado        *bool    `json:"cache_habilitado"`
 }
 
 type updateSourceRequest struct {
@@ -108,6 +109,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		MaxBandwidthBPS:        req.MaxBandwidthBPS,
 		AllowedCategories:      req.AllowedCategories,
 		IgnoredCategories:      req.IgnoredCategories,
+		CacheHabilitado:        req.CacheHabilitado,
 	})
 	if err != nil {
 		s.fail(w, r, err, "criando fonte")

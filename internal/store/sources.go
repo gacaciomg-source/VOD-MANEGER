@@ -63,6 +63,7 @@ type NewSource struct {
 	MaxBandwidthBPS        *int64
 	AllowedCategories      []string
 	IgnoredCategories      []string
+	CacheHabilitado        *bool
 }
 
 // SourcePatch são os campos alteráveis. Nulo = não alterar.
@@ -98,20 +99,21 @@ func (s *Store) CreateSource(ctx context.Context, in NewSource) (*Source, error)
 			INSERT INTO sources (
 				name, description, kind, base_url, priority, enabled,
 				sync_interval_minutes, max_connections, max_concurrent_downloads,
-				max_bandwidth_bps, allowed_categories, ignored_categories
+				max_bandwidth_bps, allowed_categories, ignored_categories, cache_habilitado
 			) VALUES (
 				$1, $2, $3, $4,
 				coalesce($5::int, (SELECT coalesce(max(priority), 0) + 1 FROM sources)),
 				coalesce($6::boolean, true),
 				coalesce($7::int, 1440), coalesce($8::int, 4), coalesce($9::int, 2),
-				$10::bigint, coalesce($11::text[], '{}'::text[]), coalesce($12::text[], '{}'::text[])
+				$10::bigint, coalesce($11::text[], '{}'::text[]), coalesce($12::text[], '{}'::text[]),
+				coalesce($13::boolean, false)
 			)
 			RETURNING *
 		)
 		SELECT `+sourceColumns+` FROM inserido s`,
 		in.Name, in.Description, in.Kind, in.BaseURL, in.Priority, in.Enabled,
 		in.SyncIntervalMinutes, in.MaxConnections, in.MaxConcurrentDownloads,
-		in.MaxBandwidthBPS, in.AllowedCategories, in.IgnoredCategories)
+		in.MaxBandwidthBPS, in.AllowedCategories, in.IgnoredCategories, in.CacheHabilitado)
 	src, err := scanSource(row)
 	return src, wrapErr("criando fonte", err)
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"vodmanager/internal/api"
+	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/auth"
 	"vodmanager/internal/bootstrap"
 	"vodmanager/internal/config"
@@ -114,6 +115,28 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	sistema := sysinfo.NovoColetor()
 	defer sistema.Fechar()
 
+	// Armazenamento do acervo.
+	//
+	// O disco local é montado sempre, mesmo com o armazenamento desligado nas configurações:
+	// desligado impede cópias NOVAS, não impede servir as que já existem. Um registro vazio
+	// faria uma instalação que já tem acervo parar de entregá-lo no instante em que alguém
+	// desmarcasse a caixa — e o sintoma seria "os filmes sumiram".
+	//
+	// As contas de nuvem não entram aqui: elas são cadastradas e removidas em execução, e
+	// são montadas sob demanda a partir do banco.
+	acervo := armazenamento.NovoRegistro()
+	if disco, err := armazenamento.NovoLocal(cfg.ArmazenamentoLocal,
+		int64(cfg.ArmazenamentoReservaGB)<<30); err != nil {
+		// Sem disco utilizável o sistema continua de pé, intermediando como sempre fez.
+		// Derrubar o serviço porque uma pasta não pôde ser criada trocaria um recurso a
+		// menos por uma operação inteira fora do ar.
+		log.Warn("armazenamento local indisponível; o acervo em disco fica desligado",
+			"pasta", cfg.ArmazenamentoLocal, "erro", err)
+	} else {
+		acervo.Guardar(armazenamento.ChaveLocal, disco)
+		log.Info("acervo em disco pronto", "pasta", disco.Raiz())
+	}
+
 	// Plano de dados: entrega os bytes de vídeo. Existe tanto no Manager quanto num Node.
 	streamAuth := edge.NewAuthenticator(st, cfg.EncryptionKey)
 	var streamProxy *edge.Proxy
@@ -153,6 +176,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		CookieSecure:  cfg.CookieSecure,
 		TrustProxy:    cfg.TrustProxy,
 		Version:       version,
+		Armazenamento: acervo,
 		Sistema:       sistema,
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)
