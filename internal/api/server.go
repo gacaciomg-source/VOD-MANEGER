@@ -178,6 +178,9 @@ func (s *Server) routes() chi.Router {
 				// ficarem registrados em evento.
 				r.Put("/acervo/arquivos/{id}/proteger", s.handleProtegerArquivo)
 				r.Delete("/acervo/arquivos/{id}", s.handleApagarArquivo)
+				// Envio de arquivo: streaming, sem o limite de 1 MiB que vale para o
+				// resto da API — aqui o corpo tem gigabytes.
+				r.Post("/acervo/enviar", s.handleEnviarArquivo)
 				// As credenciais de uma conta de nuvem dão acesso total a ela: só
 				// administrador cadastra ou remove.
 				r.Group(func(r chi.Router) {

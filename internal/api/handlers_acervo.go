@@ -35,12 +35,20 @@ func (s *Server) handleAcervoResumo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ignorar o erro e proposital: uma categoria que nao carrega nao pode impedir a tela
+	// do acervo de abrir. O seletor fica vazio, e o envio continua possivel sem categoria.
+	categorias, _ := s.deps.Store.ListCategories(r.Context())
+
 	ligado, _ := s.deps.Store.GetSetting(r.Context(), store.SettingCacheLigado, "")
 	destino, _ := s.deps.Store.GetSetting(r.Context(), store.SettingCacheBackend, store.BackendLocal)
 
 	corpo := map[string]any{
-		"resumo":        resumo,
-		"nuvens":        nuvens,
+		"resumo": resumo,
+		"nuvens": nuvens,
+		// As categorias vao junto porque o formulario de envio precisa delas: uma
+		// segunda requisicao so para preencher um seletor faria a tela abrir em duas
+		// etapas visiveis.
+		"categorias":    categorias,
 		"cache_ligado":  ligado == "true",
 		"cache_destino": destino,
 	}

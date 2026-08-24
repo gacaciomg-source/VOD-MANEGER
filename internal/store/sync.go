@@ -254,6 +254,9 @@ func (s *Store) ListSourcesDue(ctx context.Context) ([]SourceDue, error) {
 		SELECT s.id, s.name, s.sync_interval_minutes
 		FROM sources s
 		WHERE s.enabled
+		  -- A fonte interna do acervo proprio nao tem catalogo para ler nem URL para
+		  -- consultar. Sincroniza-la seria uma execucao que so pode falhar.
+		  AND s.kind <> 'proprio'
 		  AND (s.last_sync_at IS NULL
 		       OR s.last_sync_at < now() - make_interval(mins => s.sync_interval_minutes))
 		  AND NOT EXISTS (

@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"vodmanager/internal/acervo"
 	"vodmanager/internal/api"
 	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/auth"
@@ -124,7 +125,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	//
 	// As contas de nuvem não entram aqui: elas são cadastradas e removidas em execução, e
 	// são montadas sob demanda a partir do banco.
-	acervo := armazenamento.NovoRegistro()
+	discoEContas := armazenamento.NovoRegistro()
 	if disco, err := armazenamento.NovoLocal(cfg.ArmazenamentoLocal,
 		int64(cfg.ArmazenamentoReservaGB)<<30); err != nil {
 		// Sem disco utilizável o sistema continua de pé, intermediando como sempre fez.
@@ -133,9 +134,22 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		log.Warn("armazenamento local indisponível; o acervo em disco fica desligado",
 			"pasta", cfg.ArmazenamentoLocal, "erro", err)
 	} else {
-		acervo.Guardar(armazenamento.ChaveLocal, disco)
+		discoEContas.Guardar(armazenamento.ChaveLocal, disco)
 		log.Info("acervo em disco pronto", "pasta", disco.Raiz())
 	}
+
+	// O serviço do acervo: decide o que guardar, de onde ler e onde.
+	//
+	// MontarNuvem fica nulo enquanto não houver provedor de nuvem compilado. Nulo não é
+	// falha: o disco local funciona por inteiro, e uma conta cadastrada devolve "backend
+	// indisponível" — que o plano de dados trata caindo para a fonte, sem o espectador
+	// perceber nada.
+	servicoAcervo := acervo.Novo(acervo.Opcoes{
+		Store:    st,
+		Registro: discoEContas,
+		Crypto:   box,
+		Log:      log,
+	})
 
 	// Plano de dados: entrega os bytes de vídeo. Existe tanto no Manager quanto num Node.
 	streamAuth := edge.NewAuthenticator(st, cfg.EncryptionKey)
@@ -149,6 +163,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			Resolver: scheduler.Orchestrator(),
 			Log:      log,
 			NodeID:   cfg.NodeID,
+			Acervo:   servicoAcervo,
 			// Em MB na configuracao, em bytes no codigo: ninguem escreve 20971520 num
 			// arquivo de ambiente sem errar um zero.
 			TamanhoMinimoDeVideo: int64(cfg.VideoMinimoMB) << 20,
@@ -179,7 +194,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		CookieSecure:  cfg.CookieSecure,
 		TrustProxy:    cfg.TrustProxy,
 		Version:       version,
-		Armazenamento: acervo,
+		Armazenamento: discoEContas,
 		Sistema:       sistema,
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)

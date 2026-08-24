@@ -3038,6 +3038,9 @@ async function verAcervo() {
     </div>
 
     <div class="secao-titulo">Arquivos guardados</div>
+    <div class="grupo-botoes" style="justify-content:flex-start;margin:0 0 10px">
+      <button class="btn btn-primario" id="acervo-enviar">Enviar arquivo</button>
+    </div>
     <div class="abas">
       ${aba('fonte', 'Cache de fontes', cache)}
       ${aba('proprio', 'Acervo próprio', proprio)}
@@ -3077,7 +3080,7 @@ async function verAcervo() {
       </div></div>`}
   `;
 
-  ligarAcoesDoAcervo();
+  ligarAcoesDoAcervo(resumo);
   desenharNuvens(resumo);
 }
 
@@ -3191,8 +3194,153 @@ function desenharNuvens(resumo) {
   ligarAcoesDasNuvens();
 }
 
+// abrirEnvioDeArquivo é o formulário de envio de vídeo.
+//
+// # Por que XMLHttpRequest e não fetch
+//
+// Só ele reporta progresso de UPLOAD. O fetch avisa quando termina, e num arquivo de 20 GB
+// isso significa uma tela parada por meia hora — indistinguível de travada. Quem não vê
+// progresso fecha a aba, e fechar a aba no meio perde o envio inteiro.
+function abrirEnvioDeArquivo(categorias) {
+  const opcoesCategoria = (categorias || [])
+    .filter(c => c.principal && c.content_type === 'movie')
+    .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+
+  abrirModal('Enviar arquivo para o acervo', `
+    <label>Arquivo de vídeo
+      <input type="file" id="env-arquivo" accept="video/*,.mkv,.avi,.ts,.m4v,.mpg">
+    </label>
+    <p class="dica">
+      mp4, mkv, avi, mov, ts, m4v, webm ou mpg. O envio vai <b>direto para o
+      armazenamento</b> — o arquivo não passa pela memória do servidor, então o tamanho não
+      é limitado por ela.
+    </p>
+
+    <label>Título
+      <input id="env-titulo" placeholder="deixe vazio para usar o nome do arquivo" autocomplete="off">
+    </label>
+
+    <div class="linha-campos">
+      <label>Ano (opcional)
+        <input id="env-ano" inputmode="numeric" placeholder="2024" autocomplete="off">
+      </label>
+      <label>Onde guardar
+        <select id="env-destino">
+          <option value="local">Disco desta máquina</option>
+          <option value="nuvem">Conta de nuvem</option>
+        </select>
+      </label>
+    </div>
+
+    ${opcoesCategoria ? `
+      <label>Categoria (opcional)
+        <select id="env-categoria">
+          <option value="">— sem categoria —</option>
+          ${opcoesCategoria}
+        </select>
+      </label>
+      <p class="dica">Sem categoria, o filme existe no catálogo mas fica fora das pastas.</p>` : ''}
+
+    <div class="veredito alerta" style="margin:6px 0">
+      <b>Isto vira acervo próprio.</b> A limpeza automática nunca o apaga, nem com o disco
+      cheio — porque ele não existe em nenhuma fonte, e apagar seria perda definitiva.
+      Para removê-lo, só pela tela do Acervo.
+    </div>
+
+    <div id="env-progresso" hidden>
+      <div class="barra-uso"><div class="barra-uso-preenchida ok" id="env-barra" style="width:0%"></div></div>
+      <p class="dica" id="env-texto" style="margin-top:6px"></p>
+    </div>
+
+    <div class="erro" id="env-erro" hidden></div>
+    <div class="grupo-botoes">
+      <button class="btn" data-acao="cancelar">Cancelar</button>
+      <button class="btn btn-primario" data-acao="enviar">Enviar</button>
+    </div>
+  `, corpo => {
+    corpo.querySelector('[data-acao=cancelar]').onclick = fecharModal;
+    corpo.querySelector('[data-acao=enviar]').onclick = e => {
+      const erro = corpo.querySelector('#env-erro');
+      erro.hidden = true;
+
+      const campo = corpo.querySelector('#env-arquivo');
+      const arquivo = campo.files && campo.files[0];
+      if (!arquivo) {
+        erro.textContent = 'Escolha o arquivo de vídeo.';
+        erro.hidden = false;
+        return;
+      }
+
+      // A ordem importa: o servidor lê as partes conforme elas chegam, e um título que
+      // viesse DEPOIS do arquivo só seria conhecido com os gigabytes já gravados.
+      const dados = new FormData();
+      dados.append('titulo', corpo.querySelector('#env-titulo').value.trim());
+      dados.append('ano', corpo.querySelector('#env-ano').value.trim());
+      dados.append('backend', corpo.querySelector('#env-destino').value);
+      const cat = corpo.querySelector('#env-categoria');
+      if (cat) dados.append('categoria_id', cat.value);
+      dados.append('arquivo', arquivo, arquivo.name);
+
+      const progresso = corpo.querySelector('#env-progresso');
+      const barra = corpo.querySelector('#env-barra');
+      const texto = corpo.querySelector('#env-texto');
+      progresso.hidden = false;
+      e.target.disabled = true;
+      e.target.textContent = 'Enviando…';
+      campo.disabled = true;
+
+      const req = new XMLHttpRequest();
+      req.open('POST', '/api/v1/acervo/enviar');
+      req.withCredentials = true;
+
+      req.upload.onprogress = ev => {
+        if (!ev.lengthComputable) return;
+        const pct = Math.round((ev.loaded / ev.total) * 100);
+        barra.style.width = pct + '%';
+        texto.textContent = `${pct}% — ${formatarBytes(ev.loaded)} de ${formatarBytes(ev.total)}`;
+      };
+      // O último byte enviado não é o fim: o servidor ainda está gravando no destino. Dizer
+      // "100%" e ficar parado pareceria travamento justo no momento mais frágil.
+      req.upload.onload = () => {
+        texto.textContent = 'Enviado. Gravando no destino…';
+      };
+
+      req.onload = () => {
+        if (req.status >= 200 && req.status < 300) {
+          fecharModal();
+          aviso('Arquivo enviado e já no catálogo.', 'ok');
+          recarregarAcervo();
+          return;
+        }
+        let msg = `O servidor respondeu ${req.status}.`;
+        try { msg = JSON.parse(req.responseText).error.message || msg; } catch { /* corpo não-JSON */ }
+        erro.textContent = msg;
+        erro.hidden = false;
+        progresso.hidden = true;
+        e.target.disabled = false;
+        e.target.textContent = 'Enviar';
+        campo.disabled = false;
+      };
+      req.onerror = () => {
+        erro.textContent = 'A conexão caiu durante o envio. Nada foi gravado no catálogo.';
+        erro.hidden = false;
+        progresso.hidden = true;
+        e.target.disabled = false;
+        e.target.textContent = 'Enviar';
+        campo.disabled = false;
+      };
+
+      req.send(dados);
+    };
+  });
+}
+
+
 // ligarAcoesDoAcervo conecta os botões da lista de arquivos.
-function ligarAcoesDoAcervo() {
+function ligarAcoesDoAcervo(resumo) {
+  const enviar = $("#acervo-enviar");
+  if (enviar) enviar.onclick = () => abrirEnvioDeArquivo(resumo && resumo.categorias);
+
   $$('[data-aba-acervo]').forEach(b => {
     b.onclick = () => {
       estadoAcervo.aba = b.dataset.abaAcervo;

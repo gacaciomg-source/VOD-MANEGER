@@ -176,10 +176,20 @@ CREATE TABLE arquivos_guardados (
     criado_em    timestamptz NOT NULL DEFAULT now(),
     concluido_em timestamptz,
 
-    CONSTRAINT arquivos_proprio_sem_variante
-        -- Acervo próprio não pode apontar para uma variante de fonte: seria dizer que o
-        -- arquivo veio de um lugar de onde ele não veio, e a limpeza confiaria nisso.
-        CHECK (origem = 'fonte' OR variant_id IS NULL),
+    -- O acervo próprio TAMBÉM tem variante, e precisa ter.
+    --
+    -- A primeira versão desta tabela proibia isso, com um raciocínio que parecia certo:
+    -- acervo próprio não veio de fonte nenhuma, então não deveria apontar para uma. Só que
+    -- é a variante que torna um conteúdo REPRODUZÍVEL — é dela que saem os links da lista
+    -- M3U e da API Xtream. Sem variante, um arquivo enviado pelo painel ficaria guardado e
+    -- invisível: ninguém conseguiria assistir.
+    --
+    -- A variante do acervo próprio pertence a uma fonte interna, criada pelo sistema, que a
+    -- sincronização nunca visita. Assim todo o resto do catálogo — categorias, prioridade,
+    -- exportação, reprodução — funciona sem saber que aquele conteúdo é diferente.
+    --
+    -- E a proteção não se perde: quem decide o que a limpeza pode apagar é a coluna
+    -- `origem`, não a presença de variante.
     CONSTRAINT arquivos_nuvem_tem_conta
         -- Sem isto, um arquivo poderia dizer "estou na nuvem" sem dizer em qual — e não
         -- haveria como encontrá-lo nem como saber que ele se perdeu.
@@ -236,3 +246,24 @@ ALTER TABLE sources
 
 COMMENT ON COLUMN sources.cache_habilitado IS
     'Se o conteúdo desta fonte pode ser copiado para o acervo. Exige também a chave geral ligada.';
+
+-- ---------------------------------------------------------------------------
+-- A fonte interna do acervo próprio
+-- ---------------------------------------------------------------------------
+--
+-- Um arquivo enviado pelo painel precisa virar conteúdo reproduzível, e no catálogo o que
+-- torna algo reproduzível é a VARIANTE — é dela que saem os links da lista M3U e da API
+-- Xtream. Uma variante pertence a uma fonte; logo, o acervo próprio precisa de uma.
+--
+-- A alternativa seria ensinar exportação, reprodução, categorias e prioridade a lidar com
+-- "conteúdo sem fonte". Seriam quatro caminhos novos, cada um com o seu jeito de estar
+-- errado, para representar o que a estrutura existente já representa bem.
+--
+-- 'proprio' é um tipo de fonte que a sincronização nunca visita: não há URL para consultar
+-- nem catálogo para ler. Ela existe para ser dona das variantes do acervo próprio, e é isso.
+ALTER TABLE sources DROP CONSTRAINT sources_kind_check;
+ALTER TABLE sources ADD CONSTRAINT sources_kind_check
+    CHECK (kind IN ('m3u', 'xtream', 'proprio'));
+
+COMMENT ON COLUMN sources.kind IS
+    'm3u e xtream são fontes externas, sincronizadas. proprio é a fonte interna do acervo enviado pelo painel: nunca é sincronizada, existe para ser dona das variantes desse conteúdo.';
