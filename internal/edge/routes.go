@@ -3,9 +3,11 @@ package edge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"vodmanager/internal/roles"
@@ -85,6 +87,19 @@ func (p *Proxy) servirComCredencial(w http.ResponseWriter, r *http.Request, conf
 	// repassar a senha para dez pessoas às suas custas.
 	liberar, ok := p.conexoes.Ocupar(cred)
 	if !ok {
+		// A recusa por limite era o único desfecho INVISÍVEL do sistema.
+		//
+		// Ela acontece antes de a sessão existir, então não gerava linha em Reproduções,
+		// nem evento, nem sequer uma linha de registro. Do lado de quem assiste, o vídeo
+		// simplesmente não abre; do lado de quem administra, não havia o que olhar — e a
+		// conclusão natural era culpar o servidor de vídeo.
+		//
+		// Isso importa mais do que parece quando o consumidor é um painel que reabre a
+		// conexão muitas vezes por filme: a cada reabertura, a vaga antiga pode ainda não
+		// ter sido devolvida, e o limite é atingido por sobreposição — não por gente
+		// assistindo em excesso.
+		p.registrarRecusaPorLimite(r, cred)
+
 		w.Header().Set("Retry-After", "30")
 		http.Error(w,
 			"limite de reproduções simultâneas atingido para esta credencial",
@@ -214,4 +229,42 @@ func LinkPublico(base, usuario, senha string, alvo *store.StreamTarget) string {
 	}
 	return strings.TrimRight(base, "/") + "/" + segmento + "/" +
 		usuario + "/" + senha + "/" + strconv.FormatInt(alvo.ID, 10) + "." + ext
+}
+
+// registrarRecusaPorLimite deixa rastro de uma reprodução que nem chegou a começar.
+//
+// Em duas formas, e cada uma serve a um momento diferente: o registro do serviço, para quem
+// está investigando agora com o journal aberto; e o evento, para quem só vai olhar o painel
+// amanhã e precisa achar sem saber o que procurar.
+func (p *Proxy) registrarRecusaPorLimite(r *http.Request, cred *store.StreamCredential) {
+	limite := 0
+	if cred.MaxConnections != nil {
+		limite = *cred.MaxConnections
+	}
+	ativas := p.conexoes.Ativas(cred.ID)
+
+	p.log.Warn("reprodução recusada: limite de conexões da credencial",
+		"credencial", cred.Name, "ativas", ativas, "limite", limite,
+		"caminho", r.URL.Path)
+
+	// Contexto próprio: a requisição já foi respondida com 429, e o evento não pode
+	// depender de um contexto que está terminando.
+	ctx, cancelar := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelar()
+
+	if err := p.store.InsertEvent(ctx, store.NewEvent{
+		Level:    "warn",
+		Category: "stream",
+		Message: fmt.Sprintf(
+			"reprodução recusada: a credencial %q já tem %d de %d conexões",
+			cred.Name, ativas, limite),
+		Actor: cred.Name,
+		Data: map[string]any{
+			"credencial_id": cred.ID,
+			"ativas":        ativas,
+			"limite":        limite,
+		},
+	}); err != nil {
+		p.log.Warn("falha ao registrar a recusa por limite", "erro", err)
+	}
 }
