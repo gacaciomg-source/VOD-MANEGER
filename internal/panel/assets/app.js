@@ -3461,76 +3461,125 @@ function ligarAcoesDasNuvens() {
   if (adicionar) adicionar.onclick = () => abrirCadastroDeNuvem();
 }
 
-// abrirCadastroDeNuvem pede os dados de uma conta nova.
+// abrirCadastroDeNuvem guia o cadastro de uma conta de nuvem.
 //
-// As credenciais entram uma vez e nunca voltam: não há tela que as mostre, nem mascaradas.
-// Um token de Drive lê, escreve e apaga tudo o que houver na conta — devolvê-lo "só para
-// conferir" o colocaria no histórico do navegador e no console de quem estivesse com a aba
-// aberta. Quem esquecer, cadastra outra.
+// O roteiro fica na tela, e não num documento, porque ele tem um passo que erra sozinho: o
+// endereço de retorno precisa ser IDÊNTICO no Google e aqui, letra por letra. O painel
+// mostra o dele já montado, com botão de copiar — o que elimina a causa mais comum de a
+// autorização falhar com uma mensagem que não explica nada.
 function abrirCadastroDeNuvem() {
-  abrirModal('Adicionar conta de nuvem', `
+  const retorno = location.origin + '/api/v1/nuvens/oauth/retorno';
+
+  abrirModal('Adicionar conta do Google Drive', `
+    <p class="discreto" style="margin:-4px 0 4px">
+      São 5 minutos, uma vez por conta. Depois disso ela renova sozinha e você não mexe
+      mais nisso.
+    </p>
+
+    <div class="secao-titulo" style="margin:10px 0 0">1. Criar o projeto no Google</div>
+    <p class="dica" style="margin-top:4px">
+      Abra <b>console.cloud.google.com</b>, crie um projeto (qualquer nome), e ative a
+      <b>Google Drive API</b> em <i>APIs e serviços → Biblioteca</i>.
+    </p>
+
+    <div class="secao-titulo" style="margin:12px 0 0">2. Tela de consentimento</div>
+    <p class="dica" style="margin-top:4px">
+      Em <i>APIs e serviços → Tela de permissão OAuth</i>, escolha <b>Externo</b> e
+      preencha o nome do app e o seu e-mail.
+      <br>
+      Em <b>Usuários de teste</b>, acrescente <b>a conta do Google cujo Drive você vai
+      usar</b>. Sem isso o Google recusa a autorização com "app não verificado" — e é o
+      tropeço mais comum aqui.
+    </p>
+
+    <div class="secao-titulo" style="margin:12px 0 0">3. Criar as credenciais</div>
+    <p class="dica" style="margin-top:4px">
+      Em <i>Credenciais → Criar credenciais → ID do cliente OAuth</i>, escolha o tipo
+      <b>Aplicativo da Web</b>.
+      <br><br>
+      Em <b>URIs de redirecionamento autorizados</b>, cole exatamente isto:
+    </p>
+    <div style="display:flex;gap:8px;align-items:center;margin:6px 0">
+      <input class="mono" id="nv-retorno" readonly value="${esc(retorno)}" style="flex:1">
+      <button class="btn btn-mini" data-copiar-retorno="1">Copiar</button>
+    </div>
+    <p class="dica">
+      Precisa ser <b>igual, caractere por caractere</b>. Se o painel for acessado por outro
+      endereço depois, acrescente esse outro também.
+      <br>
+      <b>Não use "Conta de serviço"</b>: arquivos criados por ela pertencem a ela, que tem
+      cota zero — os seus terabytes não seriam usados.
+    </p>
+
+    <div class="secao-titulo" style="margin:12px 0 0">4. Preencher aqui</div>
     <label>Nome desta conta
       <input id="nv-nome" placeholder="Drive principal" autocomplete="off">
     </label>
     <p class="dica">
-      É como você vai distinguir esta das outras. <b>Não pode ser alterado depois</b>: o
-      nome faz parte da proteção das credenciais guardadas.
+      É como você distingue esta das outras. <b>Não pode ser alterado depois</b>: o nome faz
+      parte da proteção das credenciais guardadas.
     </p>
 
-    <label>Pasta no Drive (opcional)
-      <input id="nv-pasta" placeholder="id da pasta" autocomplete="off">
-    </label>
-    <p class="dica">
-      O acervo fica confinado a essa pasta. Não é organização — é limite de dano: a conta
-      tem outras coisas dentro, e um erro nosso não pode alcançá-las. Em branco, usa a
-      raiz do Drive.
-    </p>
-
-    <label>Ordem de preenchimento
-      <input id="nv-ordem" value="100" inputmode="numeric" autocomplete="off">
-    </label>
-    <p class="dica">Menor recebe primeiro. Só importa quando houver mais de uma conta.</p>
-
-    <div class="secao-titulo" style="margin:6px 0 0">Credenciais</div>
     <label>Client ID<input id="nv-cid" autocomplete="off"></label>
     <label>Client Secret<input type="password" id="nv-csec" autocomplete="new-password"></label>
-    <label>Refresh Token<input type="password" id="nv-rt" autocomplete="new-password"></label>
+
+    <div class="linha-campos">
+      <label>Pasta no Drive (opcional)
+        <input id="nv-pasta" placeholder="id da pasta" autocomplete="off">
+      </label>
+      <label>Ordem de preenchimento
+        <input id="nv-ordem" value="100" inputmode="numeric" autocomplete="off">
+      </label>
+    </div>
     <p class="dica">
-      Vêm do Google Cloud Console: crie um projeto, ative a <b>Google Drive API</b> e gere
-      um <b>ID do cliente OAuth</b> do tipo "App para computador". O refresh token é o que
-      sobrevive — o token de acesso vale uma hora e é renovado a partir dele.
-      <br><br>
-      <b>Não use conta de serviço.</b> Arquivos criados por ela pertencem a ela, que tem
-      cota zero — o espaço da sua conta pessoal não seria usado.
+      A pasta confina o acervo. Não é organização — é limite de dano: a conta tem outras
+      coisas dentro, e um erro nosso não pode alcançá-las. O id está na URL quando você abre
+      a pasta no Drive, depois de <span class="mono">/folders/</span>. Em branco, usa a raiz.
+      <br>
+      A ordem só importa com mais de uma conta: a menor recebe primeiro.
     </p>
+
+    <div class="veredito ok" style="margin:10px 0">
+      O sistema pede acesso <b>apenas aos arquivos que ele mesmo criar</b>. Seus documentos,
+      fotos e planilhas ficam invisíveis para ele — não é promessa nossa, é o Google que não
+      os entrega.
+    </div>
 
     <div class="erro" id="nv-erro" hidden></div>
     <div class="grupo-botoes">
       <button class="btn" data-acao="cancelar">Cancelar</button>
-      <button class="btn btn-primario" data-acao="salvar">Adicionar conta</button>
+      <button class="btn btn-primario" data-acao="autorizar">Autorizar no Google</button>
     </div>
   `, corpo => {
+    corpo.querySelector('[data-copiar-retorno]').onclick = e =>
+      copiar(retorno, e.target);
     corpo.querySelector('[data-acao=cancelar]').onclick = fecharModal;
-    corpo.querySelector('[data-acao=salvar]').onclick = async e => {
+
+    corpo.querySelector('[data-acao=autorizar]').onclick = async e => {
       const erro = corpo.querySelector('#nv-erro');
       erro.hidden = true;
+
+      const dados = {
+        nome: corpo.querySelector('#nv-nome').value.trim(),
+        client_id: corpo.querySelector('#nv-cid').value.trim(),
+        client_secret: corpo.querySelector('#nv-csec').value.trim(),
+        pasta_raiz: corpo.querySelector('#nv-pasta').value.trim(),
+        ordem: Number(corpo.querySelector('#nv-ordem').value) || 100,
+      };
+      if (!dados.nome || !dados.client_id || !dados.client_secret) {
+        erro.textContent = 'Preencha o nome, o client id e o client secret.';
+        erro.hidden = false;
+        return;
+      }
+
       e.target.disabled = true;
       try {
-        await api('/nuvens', {
-          method: 'POST',
-          corpo: {
-            nome: corpo.querySelector('#nv-nome').value.trim(),
-            provedor: 'gdrive',
-            pasta_raiz: corpo.querySelector('#nv-pasta').value.trim(),
-            ordem: Number(corpo.querySelector('#nv-ordem').value) || 100,
-            client_id: corpo.querySelector('#nv-cid').value.trim(),
-            client_secret: corpo.querySelector('#nv-csec').value.trim(),
-            refresh_token: corpo.querySelector('#nv-rt').value.trim(),
-          },
-        });
+        const r = await api('/nuvens/oauth/iniciar', { method: 'POST', corpo: dados });
+        // Janela nova, e não redirecionamento: o painel continua aberto atrás, e uma
+        // autorização abandonada não custa o que estava sendo feito aqui.
+        window.open(r.url, 'autorizar-drive', 'width=560,height=680');
         fecharModal();
-        aviso('Conta adicionada.', 'ok');
-        recarregarAcervo();
+        aviso('Autorize na janela do Google. Quando terminar, atualize esta tela.', 'ok');
       } catch (err) {
         erro.textContent = err.message;
         erro.hidden = false;
@@ -3539,7 +3588,6 @@ function abrirCadastroDeNuvem() {
     };
   });
 }
-
 
 // ---------------------------------------------------------------------------
 // Tela: Configurações

@@ -186,6 +186,10 @@ func (s *Server) routes() chi.Router {
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole(s.deny, store.RoleAdmin))
 					r.Post("/nuvens", s.handleCriarNuvem)
+					// Autorização do Google: o painel manda começar, o Google devolve o
+					// navegador no retorno.
+					r.Post("/nuvens/oauth/iniciar", s.handleIniciarOAuthDrive)
+					r.Get("/nuvens/oauth/retorno", s.handleRetornoOAuthDrive)
 					r.Patch("/nuvens/{id}", s.handleAjustarNuvem)
 					r.Delete("/nuvens/{id}", s.handleRemoverNuvem)
 				})
