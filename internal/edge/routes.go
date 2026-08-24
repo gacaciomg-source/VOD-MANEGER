@@ -85,7 +85,13 @@ func (p *Proxy) servirComCredencial(w http.ResponseWriter, r *http.Request, conf
 
 	// Limite de reproduções simultâneas desta credencial. É o que impede um cliente de
 	// repassar a senha para dez pessoas às suas custas.
-	liberar, ok := p.conexoes.Ocupar(cred)
+	// Com espera, e não recusa imediata.
+	//
+	// A vaga que costuma estar segurando o limite pertence a uma conexão que JÁ está
+	// morrendo — a anterior do mesmo espectador, fechando enquanto a nova chega. Aguardar
+	// alguns segundos por ela transforma uma falha dura numa demora invisível, porque
+	// acontece antes do primeiro byte.
+	liberar, ok := p.conexoes.OcuparComEspera(r.Context(), cred)
 	if !ok {
 		// A recusa por limite era o único desfecho INVISÍVEL do sistema.
 		//
