@@ -1,6 +1,8 @@
 package edge
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"testing"
 )
@@ -121,4 +123,78 @@ func TestMinimoOuPadrao(t *testing.T) {
 	if got := minimoOuPadrao(5 << 20); got != 5<<20 {
 		t.Errorf("configurado = %d, queria 5 MiB", got)
 	}
+}
+
+// leitorQueCortaNoMeio entrega parte do conteúdo e encerra limpo, como uma fonte de IPTV
+// que derruba a conexão sob carga.
+type leitorQueCortaNoMeio struct{ restante int }
+
+func (l *leitorQueCortaNoMeio) Read(p []byte) (int, error) {
+	if l.restante <= 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > l.restante {
+		n = l.restante
+	}
+	for i := range p[:n] {
+		p[i] = 'v'
+	}
+	l.restante -= n
+	return n, nil
+}
+
+// TestEntregaCortadaNaoPassaPorSucesso é a guarda do desfecho invisível mais grave.
+//
+// Quando a origem encerra a conexão, io.Copy devolve EOF — que em Go é AUSÊNCIA de erro.
+// Uma entrega cortada em 40% do filme era gravada como conclusão bem-sucedida, e a
+// reprodução aparecia nos números ao lado das que terminaram inteiras.
+//
+// Do lado de quem assiste, o filme para no meio e o player volta ao começo. Do lado de quem
+// administra, o painel dizia que tudo correu bem. É a falha mais comum de fonte de IPTV sob
+// carga, e era a que os registros não sabiam contar.
+func TestEntregaCortadaNaoPassaPorSucesso(t *testing.T) {
+	const anunciado = 1000
+
+	casos := []struct {
+		nome      string
+		entregue  int64
+		erroCopia error
+		querErro  bool
+	}{
+		{"entrega completa", anunciado, nil, false},
+		{"fonte cortou em 40%", 400, nil, true},
+		{"cliente desistiu no meio", 400, errors.New("broken pipe"), false},
+		{"fonte entregou mais que anunciou", anunciado + 10, nil, false},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			// Reproduz a decisão que o proxy toma depois da cópia.
+			faltou := int64(anunciado) - c.entregue
+			cortada := c.erroCopia == nil && anunciado > 0 && faltou > 0
+
+			if cortada != c.querErro {
+				t.Errorf("detectou corte = %v, queria %v (entregue %d de %d)",
+					cortada, c.querErro, c.entregue, anunciado)
+			}
+		})
+	}
+}
+
+// TestCorteEhIndistinguivelSemAVerificacao explica por que a guarda acima precisa existir.
+//
+// io.Copy termina SEM ERRO quando a origem fecha. Sem comparar o entregue com o anunciado,
+// não há nada no valor de retorno que separe um filme inteiro de um filme pela metade.
+func TestCorteEhIndistinguivelSemAVerificacao(t *testing.T) {
+	fonte := &leitorQueCortaNoMeio{restante: 400}
+	entregue, err := io.Copy(io.Discard, fonte)
+
+	if err != nil {
+		t.Fatalf("io.Copy devolveu %v; o ponto do teste é que ela NÃO devolve erro", err)
+	}
+	if entregue != 400 {
+		t.Fatalf("entregue = %d, queria 400", entregue)
+	}
+	// Sem a comparação com o tamanho anunciado, isto aqui é sucesso — e era.
 }

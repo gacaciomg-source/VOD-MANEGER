@@ -27,6 +27,12 @@ type origemDeVideo struct {
 	falharAte atomic.Int64 // quantas requisições devem falhar antes de responder bem
 	semRange  atomic.Bool
 	exigeCred atomic.Bool
+	// lento faz a origem gotejar os bytes, para a conexão permanecer ABERTA.
+	//
+	// Sem isto, o arquivo de teste é entregue num piscar e a vaga da credencial é
+	// devolvida antes de a segunda reprodução sequer chegar — o teste do limite passaria
+	// por engano, medindo uma capacidade que já estava livre.
+	lento atomic.Bool
 }
 
 func novaOrigemDeVideo(t *testing.T) *origemDeVideo {
@@ -49,6 +55,26 @@ func novaOrigemDeVideo(t *testing.T) *origemDeVideo {
 			w.Header().Set("Content-Length", fmt.Sprint(len(conteudoDeVideo)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(conteudoDeVideo)
+			return
+		}
+		if o.lento.Load() {
+			// Goteja: a conexão fica ocupada de verdade, como um filme sendo assistido.
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Content-Length", fmt.Sprint(len(conteudoDeVideo)))
+			w.WriteHeader(http.StatusOK)
+			for i := 0; i < len(conteudoDeVideo); i += 4096 {
+				fim := i + 4096
+				if fim > len(conteudoDeVideo) {
+					fim = len(conteudoDeVideo)
+				}
+				if _, err := w.Write(conteudoDeVideo[i:fim]); err != nil {
+					return
+				}
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(40 * time.Millisecond)
+			}
 			return
 		}
 		// http.ServeContent trata Range, 206 e If-Range corretamente.
@@ -376,7 +402,13 @@ func TestURLAssinada(t *testing.T) {
 // cliente repassa a senha e você paga a banda de todos.
 func TestLimiteDeConexoesPorCredencial(t *testing.T) {
 	origem := novaOrigemDeVideo(t)
-	// A origem responde devagar, para as reproduções ficarem sobrepostas.
+	// A origem goteja os bytes, para a primeira reprodução ficar de fato OCUPANDO a vaga
+	// enquanto a segunda chega.
+	//
+	// Sem isto o arquivo de teste é entregue num piscar, a vaga volta antes de a segunda
+	// pedir, e o teste passaria por engano — medindo uma capacidade que já estava livre em
+	// vez do limite.
+	origem.lento.Store(true)
 	amb := montarStreaming(t, origem)
 	ctx := context.Background()
 
