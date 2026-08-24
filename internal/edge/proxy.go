@@ -303,6 +303,24 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 			p.log.Warn("transmissão interrompida",
 				"variant_id", usada.ID, "bytes", enviados, "erro", errCopia)
 		}
+	} else if faltou := resp.ContentLength - enviados; resp.ContentLength > 0 && faltou > 0 {
+		// A fonte fechou a conexão ANTES de entregar o que ela mesma anunciou.
+		//
+		// Este era o desfecho invisível mais grave do sistema, e a razão é sutil: quando a
+		// origem encerra a conexão, io.Copy devolve EOF — que em Go é ausência de erro. Uma
+		// entrega cortada em 40% do filme era gravada como conclusão bem-sucedida, e a
+		// reprodução aparecia nos números ao lado das que terminaram inteiras.
+		//
+		// Do lado de quem assiste, o filme simplesmente para no meio e o player volta ao
+		// começo. Do lado de quem administra, não havia o que olhar: o painel dizia que
+		// tudo correu bem.
+		//
+		// É a falha mais comum de fonte de IPTV sob carga — e era justamente a que os
+		// nossos registros não sabiam contar.
+		estado, codigoErro = "error", "fonte_entregou_menos"
+		p.log.Warn("a fonte encerrou antes de entregar o que anunciou",
+			"variant_id", usada.ID, "fonte", usada.SourceName,
+			"entregue", enviados, "anunciado", resp.ContentLength, "faltou", faltou)
 	}
 
 	fechar(enviados, ttfb, resp.StatusCode, estado, codigoErro, &usada.ID)
