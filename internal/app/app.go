@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -139,16 +140,12 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	}
 
 	// O serviço do acervo: decide o que guardar, de onde ler e onde.
-	//
-	// MontarNuvem fica nulo enquanto não houver provedor de nuvem compilado. Nulo não é
-	// falha: o disco local funciona por inteiro, e uma conta cadastrada devolve "backend
-	// indisponível" — que o plano de dados trata caindo para a fonte, sem o espectador
-	// perceber nada.
 	servicoAcervo := acervo.Novo(acervo.Opcoes{
-		Store:    st,
-		Registro: discoEContas,
-		Crypto:   box,
-		Log:      log,
+		Store:       st,
+		Registro:    discoEContas,
+		Crypto:      box,
+		Log:         log,
+		MontarNuvem: montarNuvem,
 	})
 
 	// Plano de dados: entrega os bytes de vídeo. Existe tanto no Manager quanto num Node.
@@ -274,4 +271,25 @@ func NewLogger(cfg *config.Config) *slog.Logger {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	}
 	return slog.New(handler).With("node_id", cfg.NodeID, "role", string(cfg.Role))
+}
+
+// montarNuvem constrói o backend de uma conta a partir das credenciais dela.
+//
+// É o único lugar do sistema que sabe quais provedores existem. O pacote `acervo` decide
+// QUANDO montar; este decide COMO — e é por isso que acrescentar um provedor novo é um
+// `case` aqui e um arquivo em `armazenamento`, sem tocar em mais nada.
+//
+// As credenciais chegam já decifradas: quem lida com a chave mestra é o serviço do acervo,
+// e um provedor a mais não pode significar mais um lugar por onde a chave passa.
+func montarNuvem(_ context.Context, nuvem *store.Nuvem, credenciais []byte) (armazenamento.Backend, error) {
+	switch nuvem.Provedor {
+	case store.ProvedorGDrive:
+		var cred armazenamento.CredenciaisGDrive
+		if err := json.Unmarshal(credenciais, &cred); err != nil {
+			return nil, fmt.Errorf("credenciais da conta %q em formato inesperado", nuvem.Nome)
+		}
+		return armazenamento.NovoGDrive(nuvem.Nome, cred, nuvem.PastaRaiz)
+	default:
+		return nil, fmt.Errorf("provedor %q não é reconhecido por esta versão", nuvem.Provedor)
+	}
 }
