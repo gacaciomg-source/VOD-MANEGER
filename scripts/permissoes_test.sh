@@ -87,6 +87,15 @@ exige scripts/lib/servicos.sh \
 exige scripts/atualizar.sh '^ *vodm_atualizar_fonte ' \
     "o atualizador busca a versão nova do repositório"
 
+# O botão atualiza a linha em que a máquina está, e não sempre a principal.
+#
+# Forçar origin/main arrastava de volta para a principal quem estivesse numa branch para
+# testar um recurso — em silêncio, e com a aparência de que o recurso tinha sumido. Um botão
+# em que não se confia é um botão que não existe.
+exige scripts/lib/servicos.sh \
+    'symbolic-ref --quiet --short HEAD' \
+    "o atualizador respeita a linha em que a máquina está"
+
 echo
 echo "O que o systemd não fornece e os scripts precisam"
 

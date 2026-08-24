@@ -289,6 +289,15 @@ vodm_pacotes() {
 # Descarta alterações locais de propósito: a pasta do código é uma cópia de trabalho do
 # sistema, não um lugar para editar. Um arquivo alterado à mão ali travaria o `pull` e
 # faria o botão de atualizar falhar por um motivo que ninguém lembra.
+# O botão atualiza a LINHA EM QUE A MÁQUINA ESTÁ, e não sempre a principal.
+#
+# Antes ele forçava `origin/main`. Numa máquina posta numa branch para testar um recurso, o
+# botão a arrastava de volta para a principal — em silêncio, e com a aparência de que o
+# recurso tinha sumido. Quem experimenta algo assim conclui, com razão, que não pode usar o
+# botão; e um botão em que não se confia é um botão que não existe.
+#
+# Ficar na branch é o que se pede a quem está testando. Ele precisa poder atualizar sem
+# perder o lugar.
 vodm_atualizar_fonte() {
     local pasta="$1" repo="$2"
     if [ ! -d "$pasta/.git" ]; then
@@ -297,8 +306,22 @@ vodm_atualizar_fonte() {
         return
     fi
     git -C "$pasta" fetch --quiet --all --tags --prune
-    local ramo
-    ramo=$(git -C "$pasta" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")
-    [ -n "$ramo" ] || ramo="origin/main"
-    git -C "$pasta" reset --quiet --hard "$ramo"
+
+    local atual
+    atual=$(git -C "$pasta" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+
+    # HEAD solto (uma tag, um commit específico) não tem linha para seguir. Nesse caso a
+    # principal é o destino certo: quem fixou um commit à mão não usaria o botão para sair
+    # dele sem querer.
+    if [ -z "$atual" ] || ! git -C "$pasta" rev-parse --verify --quiet "origin/$atual" >/dev/null; then
+        atual=$(git -C "$pasta" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
+                | sed 's|^origin/||')
+        [ -n "$atual" ] || atual="main"
+        echo "    linha: $atual (a principal)"
+    else
+        echo "    linha: $atual"
+    fi
+
+    git -C "$pasta" checkout --quiet "$atual" 2>/dev/null || true
+    git -C "$pasta" reset --quiet --hard "origin/$atual"
 }
