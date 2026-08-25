@@ -265,3 +265,91 @@ func (l *leitorDaFila) Read(p []byte) (int, error) {
 	l.atual = l.atual[n:]
 	return n, nil
 }
+
+// TalvezAdiantarProximo enfileira o episódio seguinte ao que acabou de ser assistido.
+//
+// # Por que isto existe
+//
+// O cache guarda o que JÁ foi assistido — e em série isso é exatamente o episódio que o
+// espectador não vai repetir. Terminado o 50, ele abre o 51, que é o único que ninguém tem.
+// Sozinho, o cache chega sempre um episódio atrasado.
+//
+// Adiantando, a conta se inverte: quando o espectador chega ao 51, ele já está no disco.
+//
+// # Um só, e não a temporada inteira
+//
+// Adiantar dez episódios seria baixar dezenas de gigabytes por uma aposta sobre alguém que
+// pode largar a série no próximo. Um episódio é a aposta que se paga sozinha na primeira
+// troca — e a que custa pouco quando erra.
+//
+// Não devolve erro de propósito: nada aqui pode afetar quem está assistindo. Falhar em
+// adiantar significa apenas que o espectador vai esperar o download do 51, que é exatamente
+// o que acontecia antes.
+func (s *Servico) TalvezAdiantarProximo(ctx context.Context, alvo *store.StreamTarget) {
+	if alvo == nil || alvo.Kind != store.TargetEpisode || alvo.EpisodeID == nil {
+		return
+	}
+	pol := s.PoliticaAtual(ctx)
+	if !pol.Ligado {
+		return
+	}
+
+	proximoID, err := s.store.ProximoEpisodio(ctx, *alvo.EpisodeID)
+	if err != nil {
+		// Último episódio da série é o caso normal aqui, e não tem o que registrar.
+		if !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("falha ao procurar o próximo episódio",
+				"episode_id", *alvo.EpisodeID, "erro", err)
+		}
+		return
+	}
+
+	proximoAlvo, variantes, err := s.store.ResolveEpisodeForStream(ctx, proximoID)
+	if err != nil || len(variantes) == 0 {
+		return
+	}
+
+	// A primeira variante é a que a reprodução usaria: a lista já vem na ordem de
+	// prioridade. Adiantar por outra guardaria um arquivo que não é o que seria servido.
+	v := variantes[0]
+	fonte, err := s.store.GetSource(ctx, v.SourceID)
+	if err != nil || !fonte.CacheHabilitado {
+		return
+	}
+
+	novo := store.NovoArquivo{
+		VariantID:    &v.ID,
+		TargetKind:   proximoAlvo.Kind,
+		TargetID:     proximoAlvo.ID,
+		Backend:      pol.Destino,
+		Origem:       store.OrigemFonte,
+		ContainerExt: v.ContainerExt,
+	}
+	if pol.Destino == store.BackendNuvem {
+		nuvem, err := s.store.NuvemParaGravar(ctx, 0)
+		if err != nil {
+			return
+		}
+		novo.NuvemID = &nuvem.ID
+	}
+
+	destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID)
+	if err != nil || !s.HaOndeGuardar(ctx, pol, destino) {
+		return
+	}
+
+	arquivo, err := s.store.EnfileirarArquivo(ctx, novo)
+	if err != nil {
+		s.log.Warn("falha ao adiantar o próximo episódio", "episode_id", proximoID, "erro", err)
+		return
+	}
+	if arquivo.Estado != store.ArquivoPendente {
+		// Já está pronto ou já está descendo. Nada a fazer, e é o desfecho desejável.
+		return
+	}
+	if err := s.store.MarcarAdiantado(ctx, arquivo.ID); err != nil {
+		s.log.Warn("falha ao marcar a cópia como adiantada", "arquivo_id", arquivo.ID, "erro", err)
+	}
+	s.log.Info("próximo episódio adiantado",
+		"episode_id", proximoID, "arquivo_id", arquivo.ID, "titulo", proximoAlvo.Title)
+}

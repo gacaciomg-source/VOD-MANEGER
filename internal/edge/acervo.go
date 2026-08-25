@@ -39,6 +39,9 @@ type Acervo interface {
 	// alimentar uma copia. Devolve nulo quando nao — o caso comum, e nao e falha.
 	TalvezCapturar(ctx context.Context, v *store.PlayableVariant, alvo *store.StreamTarget,
 		inicio, tamanho int64, ext string) CapturaDoAcervo
+	// TalvezAdiantarProximo enfileira o episodio seguinte, para que a troca de episodio
+	// nao espere um download que poderia ter comecado antes.
+	TalvezAdiantarProximo(ctx context.Context, alvo *store.StreamTarget)
 }
 
 // faixa é o pedaço do arquivo que o cliente pediu.
@@ -170,6 +173,13 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	p.fecharSessao(streamID, enviados, ttfb, status, estado, codigoErro, 0, arquivo.VariantID)
 	p.contabilidade.Registrar(ped.credID, enviados)
 	p.acervo.RegistrarAcesso(r.Context(), arquivo.ID)
+
+	// Adiantar tambem daqui: quem assiste o episodio 50 do disco vai abrir o 51 do mesmo
+	// jeito, e faltando so neste caminho a serie inteira sairia do cache um episodio
+	// atrasada — que e exatamente o defeito que o adiantamento existe para remover.
+	if estado == "closed" {
+		p.acervo.TalvezAdiantarProximo(context.WithoutCancel(r.Context()), ped.alvo)
+	}
 
 	p.log.Info("stream servido do acervo",
 		"content_id", ped.alvo.ContentID, "arquivo_id", arquivo.ID,

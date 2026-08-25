@@ -2982,9 +2982,10 @@ async function recarregarAcervo() {
 }
 
 async function verAcervo() {
-  const [resumo, { arquivos }] = await Promise.all([
+  const [resumo, { arquivos }, fontes] = await Promise.all([
     api('/acervo'),
     api('/acervo/arquivos?limit=300&origem=' + estadoAcervo.aba),
+    api('/sources'),
   ]);
 
   const porOrigem = origem => resumo.resumo
@@ -3031,6 +3032,8 @@ async function verAcervo() {
           <div class="rotulo">Livre no disco desta máquina</div>
         </div>` : ''}
     </div>
+
+    ${cartaoDeFontesDoCache(fontes)}
 
     <div class="cartao">
       <h2>Contas de nuvem</h2>
@@ -3120,6 +3123,9 @@ function linhaDoAcervo(a) {
       <td>
         <b>${esc(a.titulo || '(sem título)')}</b>
         ${a.protegido ? '<span class="etiqueta ok" style="margin-left:6px">protegido</span>' : ''}
+        ${a.adiantado && !a.acessos
+          ? '<span class="etiqueta alerta" style="margin-left:6px" title="Baixado por antecipação: é o episódio seguinte ao que alguém assistiu. Ninguém abriu ainda.">próxima reprodução</span>'
+          : ''}
         ${a.fonte_nome ? `<div class="dica">de ${esc(a.fonte_nome)}</div>` : ''}
         ${a.erro ? `<div class="dica" style="color:var(--erro)">${esc(a.erro)}</div>` : ''}
       </td>
@@ -3364,6 +3370,27 @@ function ligarAcoesDoAcervo(resumo) {
       estadoAcervo.aba = b.dataset.abaAcervo;
       window.scrollTo(0, 0);
       verAcervo();
+    };
+  });
+
+  // A marca de cache por fonte, editável aqui além da tela de Fontes.
+  //
+  // Marcar não copia nada retroativamente: as cópias nascem das reproduções seguintes. Por
+  // isso o aviso — sem ele, a expectativa vira "marquei e não baixou nada".
+  $$('[data-cache-fonte]').forEach(cx => {
+    cx.onchange = async () => {
+      const antes = !cx.checked;
+      cx.disabled = true;
+      try {
+        await api(`/sources/${cx.dataset.cacheFonte}`, {
+          method: 'PATCH', corpo: { cache_habilitado: cx.checked },
+        });
+        verAcervo();
+      } catch (e) {
+        cx.checked = antes;
+        cx.disabled = false;
+        aviso(`Não foi possível alterar: ${e.message}`, "erro");
+      }
     };
   });
 
@@ -4448,3 +4475,54 @@ window.fecharModal = fecharModal;
   }
   iniciarBarraSincronizacao();
 })();
+
+/**
+ * O cartão que responde à pergunta "por que só a fonte X está sendo copiada?".
+ *
+ * A resposta quase sempre é a mesma: só ela está marcada. Nada proíbe as outras — a marca é
+ * por fonte, foi decidida uma vez, e meses depois ninguém lembra quais ficaram marcadas.
+ * Antes disso a única forma de descobrir era abrir fonte por fonte.
+ *
+ * A ORDEM não se edita aqui de propósito. Ela é a prioridade de reprodução, e vale para
+ * tudo — não só para o cache. Ter dois lugares onde se arrasta a mesma lista seria um
+ * convite a que os dois discordassem.
+ */
+function cartaoDeFontesDoCache(fontes) {
+  const lista = (fontes || []).filter(f => f.kind !== 'proprio');
+  if (!lista.length) return '';
+
+  const ordenadas = [...lista].sort((a, b) => (a.priority - b.priority) || a.name.localeCompare(b.name));
+  const marcadas = ordenadas.filter(f => f.cache_habilitado).length;
+
+  return `
+    <div class="cartao">
+      <h2>Fontes que alimentam o acervo</h2>
+      <p class="discreto" style="margin:0 0 12px">
+        ${marcadas === 0
+          ? '<b>Nenhuma fonte está marcada.</b> Nada será copiado, mesmo com o armazenamento ligado.'
+          : `<b>${marcadas} de ${ordenadas.length}</b> podem ser copiadas. As demais são sempre
+             buscadas na fonte a cada reprodução.`}
+        <br>
+        A ordem abaixo é a prioridade de reprodução: a primeira disponível é a que toca — e,
+        por consequência, a que é guardada. Para mudá-la, arraste em <b>Fontes</b>.
+      </p>
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th style="width:1%">#</th><th>Fonte</th><th style="width:1%">Copiar para o acervo</th>
+        </tr></thead>
+        <tbody>${ordenadas.map((f, i) => `
+          <tr>
+            <td class="discreto">${i + 1}</td>
+            <td>
+              <b>${esc(f.name)}</b>
+              ${f.enabled ? '' : ' <span class="etiqueta neutro">desativada</span>'}
+            </td>
+            <td>
+              <input type="checkbox" data-cache-fonte="${f.id}"
+                     ${f.cache_habilitado ? "checked" : ""} ${f.enabled ? "" : "disabled"}>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+}

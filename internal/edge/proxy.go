@@ -371,6 +371,13 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	//
 	// O contexto é o de fundo, não o da requisição: este já foi cancelado quando o cliente
 	// fechou o player, e usá-lo faria a fila nunca receber nada de quem assiste até o fim.
+	// Em série, o proximo episodio e a proxima reproducao quase certa. Enfileira-lo aqui
+	// e o que faz a troca de episodio nao esperar por um download que poderia ter comecado
+	// enquanto o anterior ainda tocava.
+	if p.acervo != nil && estado == "closed" {
+		p.acervo.TalvezAdiantarProximo(context.WithoutCancel(r.Context()), ped.alvo)
+	}
+
 	if captura != nil {
 		// A captura já gravou o filme durante a entrega. `estado == "closed"` é o que
 		// distingue a cópia inteira da que parou no meio — e só a inteira vira acervo.

@@ -65,6 +65,10 @@ type ArquivoGuardado struct {
 	UltimoAcesso  *time.Time `json:"ultimo_acesso_em"`
 	CriadoEm      time.Time  `json:"criado_em"`
 	ConcluidoEm   *time.Time `json:"concluido_em"`
+	// Adiantado: a copia veio de uma aposta do sistema (proximo episodio), e nao de
+	// alguem ter assistido. Uma aposta pode estar errada, e por isso nao compete em pe de
+	// igualdade com o acervo que ja provou serventia.
+	Adiantado bool `json:"adiantado"`
 }
 
 // Descartavel informa se a limpeza automática pode apagar este arquivo.
@@ -81,7 +85,7 @@ func (a *ArquivoGuardado) Descartavel() bool {
 var camposArquivo = []string{
 	"id", "variant_id", "target_kind", "target_id", "backend", "nuvem_id", "localizador",
 	"bytes", "bytes_baixados", "bytes_totais", "container_ext", "estado", "erro", "origem",
-	"protegido", "acessos", "ultimo_acesso_em", "criado_em", "concluido_em",
+	"protegido", "acessos", "ultimo_acesso_em", "criado_em", "concluido_em", "adiantado",
 }
 
 // colunasArquivo serve às consultas de uma tabela só.
@@ -110,7 +114,7 @@ func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
 	err := linha.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend, &a.NuvemID,
 		&a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais, &a.ContainerExt,
 		&a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos, &a.UltimoAcesso,
-		&a.CriadoEm, &a.ConcluidoEm)
+		&a.CriadoEm, &a.ConcluidoEm, &a.Adiantado)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -438,7 +442,7 @@ func (s *Store) ListarArquivos(ctx context.Context, f FiltroDeArquivos) ([]Arqui
 		if err := rows.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend,
 			&a.NuvemID, &a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais,
 			&a.ContainerExt, &a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos,
-			&a.UltimoAcesso, &a.CriadoEm, &a.ConcluidoEm,
+			&a.UltimoAcesso, &a.CriadoEm, &a.ConcluidoEm, &a.Adiantado,
 			&t.Titulo, &t.NuvemNome, &t.FonteNome); err != nil {
 			return nil, wrapErr("listando o acervo", err)
 		}
@@ -537,4 +541,37 @@ func (s *Store) ReivindicarParaCaptura(ctx context.Context, id int64) (bool, err
 		return false, wrapErr("reivindicando cópia para captura", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// ProximoEpisodio devolve o episódio seguinte ao informado, na ordem de exibição.
+//
+// A comparação por par `(temporada, episódio)` resolve os dois casos de uma vez: o próximo
+// da mesma temporada, e o primeiro da temporada seguinte quando a atual acabou. Escrito como
+// duas consultas, o segundo caso seria esquecido — e o defeito só apareceria no fim de cada
+// temporada, que é justamente quando ninguém está olhando.
+//
+// ErrNotFound quando é o último episódio da série. Não é erro: é o fim.
+func (s *Store) ProximoEpisodio(ctx context.Context, episodeID int64) (int64, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT e2.id
+		FROM episodes e
+		JOIN seasons  s  ON s.id  = e.season_id
+		JOIN seasons  s2 ON s2.content_id = s.content_id
+		JOIN episodes e2 ON e2.season_id = s2.id AND e2.status <> 'deleted'
+		WHERE e.id = $1
+		  AND (s2.season_number, e2.episode_number) > (s.season_number, e.episode_number)
+		ORDER BY s2.season_number, e2.episode_number
+		LIMIT 1`, episodeID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, wrapErr("buscando o próximo episódio", err)
+}
+
+// MarcarAdiantado registra que esta cópia é uma antecipação, e não um conteúdo assistido.
+func (s *Store) MarcarAdiantado(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE arquivos_guardados SET adiantado = true WHERE id = $1`, id)
+	return wrapErr("marcando cópia adiantada", err)
 }

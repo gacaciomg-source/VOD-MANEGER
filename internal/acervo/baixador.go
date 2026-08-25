@@ -271,6 +271,17 @@ func (b *Baixador) copiar(ctx context.Context, arquivo *store.ArquivoGuardado) e
 		if errors.Is(err, armazenamento.ErrSemEspaco) {
 			return fmt.Errorf("sem espaço no destino: %w", err)
 		}
+		// "unexpected EOF" é o que o Go diz quando a fonte fecha a conexão antes de
+		// entregar o Content-Length que ela mesma anunciou. Repassado cru, vira uma linha
+		// no painel que parece defeito do armazenamento — e manda procurar no lugar errado.
+		//
+		// É a falha mais comum de fonte de IPTV sob carga, e a mesma que corta o filme no
+		// meio de quem está assistindo. Aqui ela não causa dano: a cópia parcial já foi
+		// apagada, e a fonte continua servindo como antes.
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("a fonte encerrou antes de entregar os %d bytes que anunciou "+
+				"(entregou cerca de %d); nada foi guardado", resp.ContentLength, acompanhado.total)
+		}
 		return err
 	}
 
