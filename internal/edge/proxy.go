@@ -252,7 +252,21 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	// Repassa os cabeçalhos que o player precisa para posicionar e dar seek.
 	copiarCabecalhos(w.Header(), resp.Header)
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.WriteHeader(resp.StatusCode)
+
+	// A fonte pode ter IGNORADO o Range e devolvido o arquivo inteiro.
+	//
+	// Repassar isso entrega ao player o começo do filme quando ele pediu a continuação — e
+	// com um 200 dizendo "aqui está tudo". Para o player, é um arquivo novo começando: ele
+	// volta ao início. Como a fonte se comporta igual toda vez, o mesmo filme trava sempre
+	// no mesmo lugar, que é exatamente o relato.
+	corpoDaFonte, status, corrigido := corpoNaPosicaoPedida(w, r, resp)
+	if corrigido {
+		p.log.Warn("a fonte ignorou o Range; posicionamos por conta própria",
+			"variant_id", usada.ID, "fonte", usada.SourceName,
+			"pedido", r.Header.Get("Range"),
+			"descartado", inicioPedido(r.Header.Get("Range")))
+	}
+	w.WriteHeader(status)
 
 	ttfb := int(time.Since(inicio).Milliseconds())
 
@@ -266,7 +280,7 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	// bytes — de uma fonte que morreu no meio. Sem essa consulta, um filme pausado por
 	// dois minutos seria cortado como se a fonte tivesse travado.
 	destino := &escritorDoCliente{destino: w}
-	corpo, pararVigia, fonteTravou := vigiar(resp.Body, cancelar, destino.EsperandoCliente)
+	corpo, pararVigia, fonteTravou := vigiar(corpoDaFonte, cancelar, destino.EsperandoCliente)
 	defer pararVigia()
 
 	buf := make([]byte, bufferCopia)
@@ -323,7 +337,7 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 			"entregue", enviados, "anunciado", resp.ContentLength, "faltou", faltou)
 	}
 
-	fechar(enviados, ttfb, resp.StatusCode, estado, codigoErro, &usada.ID)
+	fechar(enviados, ttfb, status, estado, codigoErro, &usada.ID)
 	// Consumo da credencial: acumulado em memória e gravado em lote. É o que alimenta
 	// as colunas de usos e transferido no painel.
 	p.contabilidade.Registrar(ped.credID, enviados)
