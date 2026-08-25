@@ -3031,7 +3031,10 @@ async function verAcervo() {
       ${esp && !esp.ilimitado ? `
         <div class="metrica">
           <div class="valor">${formatarBytes(esp.livre)}</div>
-          <div class="rotulo">Livre no disco desta máquina</div>
+          <div class="rotulo">
+            Livre de ${formatarBytes(esp.total)}
+            ${esp.pasta ? `<br><span class="dica">em ${esc(esp.pasta)}</span>` : ''}
+          </div>
         </div>` : ''}
     </div>
 
@@ -3093,7 +3096,7 @@ async function verAcervo() {
   // Só nesse caso: um acervo parado não muda, e redesenhar de dez em dez segundos uma lista
   // que ninguém está alterando gasta banco e pisca a tela por nada. Com download em curso é
   // o contrário — a porcentagem parada é indistinguível de travamento.
-  if (arquivos.some(a => a.estado === 'baixando' || a.estado === 'pendente')) {
+  if (arquivos.some(a => a.estado === 'baixando' || a.estado === 'pendente' || a.estado === 'removendo')) {
     agendarAtualizacao('acervo', 10000);
   }
 }

@@ -112,7 +112,15 @@ func (b *Baixador) Roles() []roles.Role { return []roles.Role{roles.RoleManager}
 func (b *Baixador) Err() <-chan error { return b.errCh }
 
 // Start sobe os trabalhadores.
-func (b *Baixador) Start(context.Context) error {
+func (b *Baixador) Start(ctx context.Context) error {
+	// Resíduo de uma queda anterior: cópias marcadas como em curso, sem ninguém as fazendo.
+	// A fila não enxerga esse estado, então elas ficariam paradas para sempre.
+	if n, err := b.store.DestravarCopiasPendentes(ctx); err != nil {
+		b.log.Warn("falha ao destravar cópias da execução anterior", "erro", err)
+	} else if n > 0 {
+		b.log.Warn("cópias interrompidas devolvidas à fila", "quantidade", n)
+	}
+
 	for i := 0; i < trabalhadores; i++ {
 		b.fim.Add(1)
 		go b.trabalhar(i + 1)
@@ -157,7 +165,15 @@ func (b *Baixador) trabalhar(numero int) {
 			}
 		}()
 
-		trabalhou := b.umaCopia(ctx, numero)
+		// Remoções ANTES de cópias, sempre.
+		//
+		// Quem mandou apagar está quase sempre tentando abrir espaço, e fazê-lo esperar o
+		// fim de um download de 2 GB é entregar o oposto do que ele pediu. Apagar também é
+		// barato — segundos contra horas.
+		trabalhou := b.umaRemocao(ctx)
+		if !trabalhou {
+			trabalhou = b.umaCopia(ctx, numero)
+		}
 		cancelar()
 
 		if trabalhou {
@@ -317,4 +333,54 @@ func (l *leitorComProgresso) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// umaRemocao apaga um arquivo marcado para remoção. Devolve false quando não havia nenhum.
+//
+// # Por que apagar é em duas etapas
+//
+// O arquivo existe em dois lugares: no armazenamento e no banco. Apagar a linha primeiro
+// deixaria o arquivo órfão no disco — ocupando espaço que ninguém mais sabe que está
+// ocupado, e que só apareceria como uma diferença inexplicável entre o que o painel diz e o
+// que o `df` mostra.
+//
+// Então: apaga no armazenamento, e só então esquece a linha. A ordem inversa é irreversível;
+// esta, no pior caso, deixa a linha para a próxima rodada.
+func (b *Baixador) umaRemocao(ctx context.Context) bool {
+	arquivo, err := b.store.TomarParaRemocao(ctx)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			b.log.Warn("falha ao consultar a fila de remoção", "erro", err)
+		}
+		return false
+	}
+
+	// Sem localizador não há o que apagar no armazenamento: é uma cópia que nunca chegou a
+	// existir em disco — enfileirada e cancelada, ou que falhou antes do primeiro byte.
+	if arquivo.Localizador != "" {
+		destino, err := b.servico.Backend(ctx, arquivo)
+		if err != nil {
+			// Conta de nuvem desativada, disco não montado. A linha fica marcada e volta na
+			// próxima rodada: perder a referência agora criaria o órfão que a ordem das
+			// etapas existe para evitar.
+			b.log.Warn("armazenamento indisponível para remover; será tentado de novo",
+				"arquivo_id", arquivo.ID, "erro", err)
+			return false
+		}
+		if err := destino.Apagar(ctx, arquivo.Localizador); err != nil &&
+			!errors.Is(err, armazenamento.ErrNaoEncontrado) {
+			// Já não estar lá é sucesso: o objetivo era que sumisse.
+			b.log.Warn("falha ao apagar do armazenamento; será tentado de novo",
+				"arquivo_id", arquivo.ID, "localizador", arquivo.Localizador, "erro", err)
+			return false
+		}
+	}
+
+	if err := b.store.EsquecerArquivo(ctx, arquivo.ID); err != nil {
+		b.log.Warn("arquivo apagado, mas a linha permaneceu", "arquivo_id", arquivo.ID, "erro", err)
+		return false
+	}
+	b.log.Info("arquivo removido do acervo",
+		"arquivo_id", arquivo.ID, "bytes", arquivo.Bytes, "onde", arquivo.Backend)
+	return true
 }

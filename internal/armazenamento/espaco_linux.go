@@ -22,6 +22,13 @@ func (l *Local) Espaco(_ context.Context) (Espaco, error) {
 	total := int64(fs.Blocks) * bloco
 	livre := int64(fs.Bavail) * bloco
 
+	// Usado é medido ANTES de descontar a reserva.
+	//
+	// Calculá-lo como `total - livre` depois do desconto somaria a reserva ao que está
+	// ocupado, e a tela acusaria vários gigabytes de uso que não existem — num disco recém
+	// formatado, o painel diria que já há 5 GB gastos.
+	usado := total - livre
+
 	// A reserva sai do que anunciamos como livre. Assim todo o resto do sistema — a
 	// decisão de guardar, a tela, a limpeza — trabalha com o número já descontado, e
 	// ninguém precisa lembrar de subtrair.
@@ -29,5 +36,5 @@ func (l *Local) Espaco(_ context.Context) (Espaco, error) {
 	if livre < 0 {
 		livre = 0
 	}
-	return Espaco{Total: total, Livre: livre, Usado: total - livre}, nil
+	return Espaco{Total: total, Livre: livre, Usado: usado}, nil
 }

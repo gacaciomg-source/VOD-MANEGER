@@ -58,10 +58,20 @@ func (s *Server) handleAcervoResumo(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Armazenamento != nil {
 		if local, ok := s.deps.Armazenamento.Obter(armazenamento.ChaveLocal); ok {
 			if esp, err := local.Espaco(r.Context()); err == nil {
-				corpo["espaco_local"] = map[string]any{
+				dados := map[string]any{
 					"total": esp.Total, "livre": esp.Livre, "usado": esp.Usado,
 					"ilimitado": esp.Ilimitado,
 				}
+				// A PASTA junto com os numeros, e nao so os numeros.
+				//
+				// "12 GB livres" numa maquina com um disco de 200 GB parece defeito, e a
+				// explicacao quase sempre e a mesma: o acervo esta numa particao pequena,
+				// e o disco grande esta montado em outro lugar. Sem dizer QUAL pasta foi
+				// medida, nao ha como perceber isso pela tela.
+				if l, ok := local.(interface{ Raiz() string }); ok {
+					dados["pasta"] = l.Raiz()
+				}
+				corpo["espaco_local"] = dados
 			}
 		}
 	}

@@ -575,3 +575,48 @@ func (s *Store) MarcarAdiantado(ctx context.Context, id int64) error {
 		`UPDATE arquivos_guardados SET adiantado = true WHERE id = $1`, id)
 	return wrapErr("marcando cópia adiantada", err)
 }
+
+// TomarParaRemocao pega um arquivo marcado para remoção.
+//
+// Sem troca de estado: `removendo` já é o estado final antes do esquecimento, e não há para
+// onde mover. O SKIP LOCKED faz o trabalho de exclusão mútua — dois trabalhadores nunca
+// pegam a mesma linha, e nenhum espera pelo outro.
+//
+// ErrNotFound quando não há nada a remover, que é o caso normal.
+func (s *Store) TomarParaRemocao(ctx context.Context) (*ArquivoGuardado, error) {
+	a, err := lerArquivo(s.pool.QueryRow(ctx, `
+		SELECT `+colunasArquivo+` FROM arquivos_guardados
+		WHERE estado = 'removendo'
+		ORDER BY criado_em
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1`))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("tomando arquivo para remoção", err)
+	}
+	return a, nil
+}
+
+// DestravarCopiasPendentes devolve à fila tudo que ficou preso em "baixando".
+//
+// Chamada na partida do serviço, e a razão é concreta: uma cópia em curso quando o processo
+// cai — reinício, falta de energia, `kill` — fica marcada como `baixando` sem que ninguém a
+// esteja baixando. E `baixando` é justamente o estado que a fila NÃO enxerga.
+//
+// Sem esta limpeza, cada queda de processo aposentaria em silêncio alguns títulos do acervo:
+// eles nunca terminariam de baixar e nunca reapareceriam na fila. O sintoma seria "parou de
+// baixar sozinho", sem nada nos registros apontando o motivo.
+//
+// Só na partida: neste instante não existe nenhuma cópia legítima em curso, então tudo que
+// está `baixando` é resíduo por definição.
+func (s *Store) DestravarCopiasPendentes(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE arquivos_guardados SET estado = 'pendente', bytes_baixados = 0
+		 WHERE estado = 'baixando'`)
+	if err != nil {
+		return 0, wrapErr("destravando cópias pendentes", err)
+	}
+	return tag.RowsAffected(), nil
+}
