@@ -1,0 +1,122 @@
+package acervo
+
+import (
+	"bytes"
+	"io"
+	"testing"
+	"time"
+)
+
+// A garantia que estes testes protegem é uma só: escrever na captura NUNCA para a
+// transmissão. Ela é chamada de dentro da cópia que alimenta o player, então um bloqueio
+// aqui é um filme travado na tela de alguém.
+
+func TestLeitorDaFilaRemontaOsPedacos(t *testing.T) {
+	pedacos := make(chan []byte, 3)
+	pedacos <- []byte("um ")
+	pedacos <- []byte("filme ")
+	pedacos <- []byte("inteiro")
+	close(pedacos)
+
+	lido, err := io.ReadAll(&leitorDaFila{pedacos: pedacos})
+	if err != nil {
+		t.Fatalf("leitura falhou: %v", err)
+	}
+	if string(lido) != "um filme inteiro" {
+		t.Fatalf("remontagem errada: %q", lido)
+	}
+}
+
+// O leitor precisa funcionar com buffers menores que os pedaços — é o caso real, porque
+// quem lê é o backend, e ele escolhe o próprio tamanho de bloco.
+func TestLeitorDaFilaComBufferPequeno(t *testing.T) {
+	pedacos := make(chan []byte, 2)
+	pedacos <- bytes.Repeat([]byte("a"), 100)
+	pedacos <- bytes.Repeat([]byte("b"), 100)
+	close(pedacos)
+
+	l := &leitorDaFila{pedacos: pedacos}
+	var saida bytes.Buffer
+	buf := make([]byte, 7) // não divide 100: força a leitura parcial de um pedaço
+	if _, err := io.CopyBuffer(&saida, struct{ io.Reader }{l}, buf); err != nil {
+		t.Fatalf("cópia falhou: %v", err)
+	}
+	if saida.Len() != 200 {
+		t.Fatalf("esperava 200 bytes, veio %d", saida.Len())
+	}
+	if !bytes.Equal(saida.Bytes()[:100], bytes.Repeat([]byte("a"), 100)) {
+		t.Fatal("os pedaços saíram fora de ordem")
+	}
+}
+
+// O teste central: com ninguém consumindo a fila, a captura tem de desistir em vez de
+// bloquear. Se este teste travar, é exatamente o defeito que ele existe para pegar.
+func TestCapturaDesisteEmVezDeBloquear(t *testing.T) {
+	c := &Captura{
+		pedacos: make(chan []byte, pedacosNaFila),
+		fim:     make(chan resultadoDaCaptura, 1),
+	}
+
+	pronto := make(chan struct{})
+	go func() {
+		defer close(pronto)
+		// Bem mais escritas do que cabem na fila, e nada consumindo do outro lado.
+		for i := 0; i < pedacosNaFila*10; i++ {
+			if _, err := c.Write([]byte("bytes de video")); err != nil {
+				t.Errorf("Write devolveu erro, e nunca deveria: %v", err)
+			}
+		}
+	}()
+
+	select {
+	case <-pronto:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a captura bloqueou a transmissão — a fila encheu e ela não desistiu")
+	}
+
+	if !c.desistiu {
+		t.Fatal("a fila encheu e a captura não desistiu")
+	}
+}
+
+// Depois de desistir, a captura tem de continuar aceitando escritas sem efeito. O proxy
+// segue entregando o filme até o fim, e cada bloco ainda passa por aqui.
+func TestCapturaAceitaEscritasDepoisDeDesistir(t *testing.T) {
+	c := &Captura{
+		pedacos: make(chan []byte, 1),
+		fim:     make(chan resultadoDaCaptura, 1),
+	}
+	c.desistir()
+
+	n, err := c.Write([]byte("mais bytes"))
+	if err != nil {
+		t.Fatalf("Write falhou depois de desistir: %v", err)
+	}
+	if n != len("mais bytes") {
+		t.Fatalf("Write precisa relatar o total escrito, veio %d", n)
+	}
+
+	// Desistir duas vezes não pode fechar o canal duas vezes (pânico).
+	c.desistir()
+}
+
+// A cópia do buffer é obrigatória: quem chama reaproveita o mesmo array a cada bloco. Sem a
+// cópia, o arquivo guardado seria o último bloco repetido — e o defeito só apareceria na
+// hora de assistir.
+func TestCapturaCopiaOBufferRecebido(t *testing.T) {
+	c := &Captura{
+		pedacos: make(chan []byte, 2),
+		fim:     make(chan resultadoDaCaptura, 1),
+	}
+
+	buf := []byte("primeiro")
+	if _, err := c.Write(buf); err != nil {
+		t.Fatalf("Write falhou: %v", err)
+	}
+	copy(buf, "ALTERADO") // é o que io.CopyBuffer faz no bloco seguinte
+
+	guardado := <-c.pedacos
+	if string(guardado) != "primeiro" {
+		t.Fatalf("a captura guardou o buffer sem copiar: %q", guardado)
+	}
+}

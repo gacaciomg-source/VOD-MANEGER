@@ -35,6 +35,10 @@ type Acervo interface {
 	// TalvezGuardar e chamado DEPOIS de uma entrega bem-sucedida vinda da fonte. Nao
 	// devolve erro: nada do que ele decide pode impedir o video de sair.
 	TalvezGuardar(ctx context.Context, v *store.PlayableVariant, alvo *store.StreamTarget)
+	// TalvezCapturar comeca a gravar esta transmissao no acervo, quando ela puder
+	// alimentar uma copia. Devolve nulo quando nao — o caso comum, e nao e falha.
+	TalvezCapturar(ctx context.Context, v *store.PlayableVariant, alvo *store.StreamTarget,
+		inicio, tamanho int64, ext string) CapturaDoAcervo
 }
 
 // faixa é o pedaço do arquivo que o cliente pediu.
@@ -140,7 +144,7 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	streamID, err := p.abrirSessao(r, ped)
 	if err != nil {
 		p.log.Warn("não foi possível registrar a sessão", "erro", err)
-	} else if err := p.store.MarcarEntregaDoCache(r.Context(), streamID); err != nil {
+	} else if err := p.store.MarcarResultadoDoCache(r.Context(), streamID, "hit"); err != nil {
 		// Só o rótulo da tela depende disto. Falhar aqui não pode interromper uma
 		// reprodução que já está saindo perfeitamente do disco.
 		p.log.Warn("falha ao marcar a entrega como cache", "stream_id", streamID, "erro", err)
@@ -190,4 +194,15 @@ func tipoDoConteudo(ext string) string {
 	default:
 		return "video/mp4"
 	}
+}
+
+// CapturaDoAcervo é uma cópia sendo gravada a partir da transmissão em curso.
+//
+// Escrever nela nunca bloqueia e nunca falha: ela é alimentada de dentro da cópia que
+// abastece o player, e as duas coisas virariam pausa no vídeo.
+type CapturaDoAcervo interface {
+	io.Writer
+	// Fechar decide o destino da cópia. `completo` diz se a fonte entregou tudo o que
+	// anunciou — só nesse caso a cópia vira acervo.
+	Fechar(completo bool)
 }

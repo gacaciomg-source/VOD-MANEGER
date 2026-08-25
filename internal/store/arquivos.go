@@ -523,3 +523,18 @@ func (s *Store) BytesEmCache(ctx context.Context, backend string) (int64, error)
 		backend).Scan(&total)
 	return total, wrapErr("medindo o cache", err)
 }
+
+// ReivindicarParaCaptura tenta tomar uma cópia pendente para gravar durante a reprodução.
+//
+// Devolve false quando outro já a tem. É a trava que impede dois espectadores do mesmo
+// filme, no mesmo minuto, de gravarem por cima um do outro — a troca de estado é condicional
+// e atômica, então exatamente um ganha e os demais só entregam.
+func (s *Store) ReivindicarParaCaptura(ctx context.Context, id int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE arquivos_guardados SET estado = 'baixando', bytes_baixados = 0, erro = ''
+		 WHERE id = $1 AND estado = 'pendente'`, id)
+	if err != nil {
+		return false, wrapErr("reivindicando cópia para captura", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}

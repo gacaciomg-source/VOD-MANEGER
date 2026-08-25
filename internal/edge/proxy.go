@@ -283,8 +283,29 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	corpo, pararVigia, fonteTravou := vigiar(corpoDaFonte, cancelar, destino.EsperandoCliente)
 	defer pararVigia()
 
+	// A captura: guardar enquanto entrega.
+	//
+	// Sem ela o filme desce da fonte duas vezes — uma para quem assistiu, outra depois para
+	// o baixador. Aqui a passagem do espectador É o download, e a segunda descida deixa de
+	// existir.
+	//
+	// A gravação acontece numa rotina separada, alimentada por uma fila curta. Se o
+	// armazenamento não acompanhar, a captura é abandonada na hora e a transmissão segue
+	// intocada: quem assiste nunca espera pelo disco.
+	var captura CapturaDoAcervo
+	if p.acervo != nil {
+		captura = p.acervo.TalvezCapturar(context.WithoutCancel(r.Context()),
+			usada, ped.alvo, inicioPedido(r.Header.Get("Range")), resp.ContentLength,
+			usada.ContainerExt)
+	}
+
+	var saida io.Writer = destino
+	if captura != nil {
+		saida = io.MultiWriter(destino, captura)
+	}
+
 	buf := make([]byte, bufferCopia)
-	enviados, errCopia := io.CopyBuffer(destino, corpo, buf)
+	enviados, errCopia := io.CopyBuffer(saida, corpo, buf)
 
 	estado, codigoErro := "closed", ""
 	if errCopia != nil {
@@ -350,7 +371,11 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	//
 	// O contexto é o de fundo, não o da requisição: este já foi cancelado quando o cliente
 	// fechou o player, e usá-lo faria a fila nunca receber nada de quem assiste até o fim.
-	if p.acervo != nil && estado == "closed" && enviados > 0 {
+	if captura != nil {
+		// A captura já gravou o filme durante a entrega. `estado == "closed"` é o que
+		// distingue a cópia inteira da que parou no meio — e só a inteira vira acervo.
+		captura.Fechar(estado == "closed")
+	} else if p.acervo != nil && estado == "closed" && enviados > 0 {
 		p.acervo.TalvezGuardar(context.WithoutCancel(r.Context()), usada, ped.alvo)
 	}
 

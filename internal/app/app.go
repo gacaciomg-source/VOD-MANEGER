@@ -160,7 +160,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			Resolver: scheduler.Orchestrator(),
 			Log:      log,
 			NodeID:   cfg.NodeID,
-			Acervo:   servicoAcervo,
+			Acervo:   acervoParaEdge{servicoAcervo},
 			// Em MB na configuracao, em bytes no codigo: ninguem escreve 20971520 num
 			// arquivo de ambiente sem errar um zero.
 			TamanhoMinimoDeVideo: int64(cfg.VideoMinimoMB) << 20,
@@ -304,4 +304,32 @@ func montarNuvem(_ context.Context, nuvem *store.Nuvem, credenciais []byte) (arm
 	default:
 		return nil, fmt.Errorf("provedor %q não é reconhecido por esta versão", nuvem.Provedor)
 	}
+}
+
+// acervoParaEdge adapta o serviço do acervo à interface que o plano de dados espera.
+//
+// # Por que um adaptador, e não a interface direta
+//
+// `TalvezCapturar` devolve `*acervo.Captura`, e o plano de dados espera uma interface. Em Go
+// esses dois tipos não casam numa assinatura de método, então a conversão acontece aqui — no
+// único lugar que já conhece os dois lados.
+//
+// # A armadilha que ele desarma
+//
+// Um ponteiro nulo guardado dentro de uma interface NÃO é uma interface nula. Se este método
+// devolvesse o `*Captura` nulo direto, o `if captura != nil` do proxy daria verdadeiro, e a
+// primeira gravação chamaria um método em ponteiro nulo — derrubando a reprodução em
+// exatamente o caso mais comum, que é o de não haver captura nenhuma.
+//
+// O `return nil` explícito abaixo é o que impede isso.
+type acervoParaEdge struct{ *acervo.Servico }
+
+func (a acervoParaEdge) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
+	alvo *store.StreamTarget, inicio, tamanho int64, ext string) edge.CapturaDoAcervo {
+
+	c := a.Servico.TalvezCapturar(ctx, v, alvo, inicio, tamanho, ext)
+	if c == nil {
+		return nil
+	}
+	return c
 }
