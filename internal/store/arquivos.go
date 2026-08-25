@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -75,9 +76,34 @@ func (a *ArquivoGuardado) Descartavel() bool {
 	return a.Origem == OrigemFonte && !a.Protegido && a.Estado == ArquivoPronto
 }
 
-const colunasArquivo = `id, variant_id, target_kind, target_id, backend, nuvem_id, localizador,
-	bytes, bytes_baixados, bytes_totais, container_ext, estado, erro, origem, protegido,
-	acessos, ultimo_acesso_em, criado_em, concluido_em`
+// camposArquivo é a ordem em que as colunas são lidas. Uma lista só, para que a leitura e
+// as consultas não possam divergir.
+var camposArquivo = []string{
+	"id", "variant_id", "target_kind", "target_id", "backend", "nuvem_id", "localizador",
+	"bytes", "bytes_baixados", "bytes_totais", "container_ext", "estado", "erro", "origem",
+	"protegido", "acessos", "ultimo_acesso_em", "criado_em", "concluido_em",
+}
+
+// colunasArquivo serve às consultas de uma tabela só.
+var colunasArquivo = strings.Join(camposArquivo, ", ")
+
+// colunasArquivoDe qualifica as colunas com o apelido da tabela.
+//
+// Obrigatório em toda consulta com junção, e a razão é concreta: `id` e `criado_em` existem
+// tanto em arquivos_guardados quanto em nuvens. Sem o prefixo o Postgres recusa a consulta
+// inteira por ambiguidade — foi assim que a tela do Acervo parou de abrir, com um "erro
+// interno" que não dizia nada.
+//
+// Derivar do mesmo lugar em vez de escrever uma segunda lista à mão: duas listas divergem, e
+// a divergência aparece como uma coluna lida na posição errada — silenciosa, e muito pior
+// que um erro de sintaxe.
+func colunasArquivoDe(apelido string) string {
+	qualificadas := make([]string, len(camposArquivo))
+	for i, campo := range camposArquivo {
+		qualificadas[i] = apelido + "." + campo
+	}
+	return strings.Join(qualificadas, ", ")
+}
 
 func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
 	var a ArquivoGuardado
@@ -369,7 +395,7 @@ func (s *Store) ListarArquivos(ctx context.Context, f FiltroDeArquivos) ([]Arqui
 		f.Limite = 200
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+colunasArquivo+`,
+		SELECT `+colunasArquivoDe("a")+`,
 		       coalesce(
 		           CASE a.target_kind
 		               WHEN 'content' THEN (SELECT c.title FROM contents c WHERE c.id = a.target_id)
