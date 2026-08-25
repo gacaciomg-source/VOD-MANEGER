@@ -97,3 +97,60 @@ func TestConsultasDoAcervoExecutam(t *testing.T) {
 		}
 	})
 }
+
+// TestTituloDeEpisodioTrazASerie: um episódio sozinho não diz de que série é.
+//
+// "Episódio 3" é uma linha inútil num acervo com centenas deles — vira uma lista de nomes
+// repetidos que não ajuda a decidir nada. O acervo mostra "Série · S01E03 · Título".
+func TestTituloDeEpisodioTrazASerie(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	serie, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentSeries, Title: "Arquivo X", NormalizedTitle: "arquivo x",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	temporada, err := env.Store.EnsureSeason(ctx, serie.ID, 1)
+	if err != nil {
+		t.Fatalf("EnsureSeason: %v", err)
+	}
+	episodio, err := env.Store.EnsureEpisode(ctx, temporada, 3, "Conduit", "", "", nil)
+	if err != nil {
+		t.Fatalf("EnsureEpisode: %v", err)
+	}
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+	variante, err := env.Store.CreateVariant(ctx, store.NewVariant{
+		SourceID: fonte.ID, TargetKind: "episode", TargetID: episodio,
+		ExternalID: "teste:1", OriginURL: "http://exemplo.tld/x.mp4", ContainerExt: "mp4",
+	})
+	if err != nil {
+		t.Fatalf("UpsertVariant: %v", err)
+	}
+
+	if _, err := env.Store.EnfileirarArquivo(ctx, store.NovoArquivo{
+		VariantID: &variante.ID, TargetKind: "episode", TargetID: episodio,
+		Backend: store.BackendLocal, Origem: store.OrigemFonte,
+		Localizador: "x.mp4", Bytes: 100,
+	}); err != nil {
+		t.Fatalf("EnfileirarArquivo: %v", err)
+	}
+
+	arquivos, err := env.Store.ListarArquivos(ctx, store.FiltroDeArquivos{Limite: 10})
+	if err != nil {
+		t.Fatalf("ListarArquivos: %v", err)
+	}
+	if len(arquivos) != 1 {
+		t.Fatalf("listou %d arquivos, queria 1", len(arquivos))
+	}
+
+	const quer = "Arquivo X · S01E03 · Conduit"
+	if arquivos[0].Titulo != quer {
+		t.Errorf("titulo = %q, queria %q", arquivos[0].Titulo, quer)
+	}
+}

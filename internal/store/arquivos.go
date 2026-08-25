@@ -399,7 +399,22 @@ func (s *Store) ListarArquivos(ctx context.Context, f FiltroDeArquivos) ([]Arqui
 		       coalesce(
 		           CASE a.target_kind
 		               WHEN 'content' THEN (SELECT c.title FROM contents c WHERE c.id = a.target_id)
-		               WHEN 'episode' THEN (SELECT e.title FROM episodes e WHERE e.id = a.target_id)
+		               -- Episódio sem a série a que pertence é uma linha inútil: "Episódio 3"
+		               -- não diz de que série, e um acervo com centenas deles vira uma lista
+		               -- de nomes repetidos que ninguém consegue usar para decidir nada.
+		               --
+		               -- O formato fica "Série · S01E03 · Título", com o título só quando
+		               -- ele existe — muitas fontes não o trazem, e um separador solto no fim
+		               -- seria pior que a ausência.
+		               WHEN 'episode' THEN (
+		                   SELECT serie.title
+		                          || ' · S' || lpad(se.season_number::text, 2, '0')
+		                          || 'E' || lpad(e.episode_number::text, 2, '0')
+		                          || CASE WHEN btrim(e.title) <> '' THEN ' · ' || e.title ELSE '' END
+		                   FROM episodes e
+		                   JOIN seasons se ON se.id = e.season_id
+		                   JOIN contents serie ON serie.id = se.series_content_id
+		                   WHERE e.id = a.target_id)
 		           END, '') AS titulo,
 		       n.nome,
 		       (SELECT src.name FROM source_variants v
