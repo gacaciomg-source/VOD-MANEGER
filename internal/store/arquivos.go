@@ -504,3 +504,22 @@ func (s *Store) AnotarTamanhoTotal(ctx context.Context, id, total int64) error {
 		`UPDATE arquivos_guardados SET bytes_totais = $2 WHERE id = $1`, id, total)
 	return wrapErr("anotando o tamanho total", err)
 }
+
+// BytesEmCache soma o que o CACHE ocupa num destino.
+//
+// Só `origem = 'fonte'`, e é essa a razão de a função existir em vez de reaproveitar o
+// resumo: o acervo próprio não é descartável, então um limite que o incluísse ficaria
+// estourado para sempre sem que a limpeza tivesse o que apagar — e o cache pararia de
+// funcionar por causa de arquivos que ninguém jamais vai remover.
+//
+// Conta o que está `baixando` junto com o que está `pronto`. Ignorar as cópias em curso
+// deixaria o limite ser furado por tudo que estivesse em voo no momento da conferência.
+func (s *Store) BytesEmCache(ctx context.Context, backend string) (int64, error) {
+	var total int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT coalesce(sum(CASE WHEN estado = 'pronto' THEN bytes ELSE bytes_baixados END), 0)
+		FROM arquivos_guardados
+		WHERE origem = 'fonte' AND backend = $1 AND estado IN ('pronto', 'baixando')`,
+		backend).Scan(&total)
+	return total, wrapErr("medindo o cache", err)
+}

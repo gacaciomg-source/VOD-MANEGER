@@ -3732,11 +3732,18 @@ async function verConfiguracoes() {
         <label>Carência antes de poder apagar (horas)
           <input id="cfg-cache-carencia" type="number" min="0" value="${esc(c.cache_idade_minima_horas || '24')}">
         </label>
+        <label>Folga mínima do armazenamento (%)
+          <input id="cfg-cache-folga" type="number" min="0" max="90" value="${esc(c.cache_espaco_minimo_pct || '10')}">
+        </label>
       </div>
       <p class="dica">
         A carência evita o vaivém: guardar um filme, apagá-lo dez minutos depois para caber
         outro, e na hora seguinte fazer o inverso — gasta banda dos dois lados e não melhora
         nada.
+        <br>
+        Ao atingir a <b>folga mínima</b>, o sistema para de guardar e volta a buscar da
+        fonte — o que já cabe no disco continua sendo servido de lá. Ele não apaga um filme
+        procurado para caber um que ninguém pediu ainda.
         <br>
         <b>A limpeza automática só apaga cache.</b> O que você enviar pelo painel nunca é
         apagado sozinho, nem com o disco cheio; a decisão aparece na tela do Acervo.
@@ -3823,6 +3830,7 @@ async function verConfiguracoes() {
           cache_ligado: $('#cfg-cache').checked,
           cache_backend: $('#cfg-cache-destino').value,
           cache_idade_minima_horas: Number($('#cfg-cache-carencia').value) || 0,
+          cache_espaco_minimo_pct: Number($("#cfg-cache-folga").value) || 0,
         },
       });
       aviso($('#cfg-cache').checked

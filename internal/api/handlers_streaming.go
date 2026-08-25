@@ -640,6 +640,7 @@ type configPublicaRequest struct {
 	CacheBackend          *string `json:"cache_backend"`
 	CacheLimiteBytes      *int64  `json:"cache_limite_bytes"`
 	CacheIdadeMinimaHoras *int    `json:"cache_idade_minima_horas"`
+	CacheEspacoMinimoPct  *int    `json:"cache_espaco_minimo_pct"`
 }
 
 // handleGetSettings devolve as configurações editáveis pelo painel.
@@ -673,6 +674,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"cache_backend":            s.lerTexto(r, store.SettingCacheBackend, store.BackendLocal),
 		"cache_limite_bytes":       s.lerTexto(r, store.SettingCacheLimiteBytes, "0"),
 		"cache_idade_minima_horas": s.lerTexto(r, store.SettingCacheIdadeMinimaHoras, "24"),
+		"cache_espaco_minimo_pct":  s.lerTexto(r, store.SettingCacheEspacoMinimoPct, "10"),
 		"endereco_atual":           atual,
 		// Divergente quando o endereço que entrega o conteúdo não é por onde você chegou.
 		// Nem sempre é erro — quem separa o domínio do painel do domínio do conteúdo faz
@@ -768,6 +770,21 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheIdadeMinimaHoras,
 			strconv.Itoa(*req.CacheIdadeMinimaHoras)); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+	if req.CacheEspacoMinimoPct != nil {
+		// O teto de 90 não é arbitrário: acima dele o cache nunca guardaria nada, e a
+		// configuração viraria um jeito silencioso de desligá-lo — para isso já existe a
+		// chave geral, que diz o que faz.
+		if *req.CacheEspacoMinimoPct < 0 || *req.CacheEspacoMinimoPct > 90 {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"a folga de armazenamento precisa estar entre 0% e 90%", "cache_espaco_minimo_pct")
+			return
+		}
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheEspacoMinimoPct,
+			strconv.Itoa(*req.CacheEspacoMinimoPct)); err != nil {
 			s.fail(w, r, err, "gravando configuração do acervo")
 			return
 		}

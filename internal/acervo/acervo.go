@@ -177,11 +177,17 @@ type Politica struct {
 	Destino     string
 	LimiteBytes int64
 	IdadeMinima time.Duration
+	// EspacoMinimoPct é a folga, em porcentagem, abaixo da qual não se guarda mais nada.
+	EspacoMinimoPct int
 }
 
 // PoliticaAtual lê as configurações do acervo.
 func (s *Servico) PoliticaAtual(ctx context.Context) Politica {
-	p := Politica{Destino: store.BackendLocal, IdadeMinima: 24 * time.Hour}
+	p := Politica{
+		Destino:         store.BackendLocal,
+		IdadeMinima:     24 * time.Hour,
+		EspacoMinimoPct: espacoMinimoPadrao,
+	}
 
 	if v, err := s.store.GetSetting(ctx, store.SettingCacheLigado, "false"); err == nil {
 		p.Ligado = v == "true"
@@ -197,6 +203,13 @@ func (s *Servico) PoliticaAtual(ctx context.Context) Politica {
 	if v, err := s.store.GetSetting(ctx, store.SettingCacheIdadeMinimaHoras, "24"); err == nil {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			p.IdadeMinima = time.Duration(n) * time.Hour
+		}
+	}
+	if v, err := s.store.GetSetting(ctx, store.SettingCacheEspacoMinimoPct, ""); err == nil && v != "" {
+		// Aceita de 0 a 90. Acima disso o cache nunca guardaria nada, e a configuração
+		// viraria um jeito silencioso de desligá-lo — para isso já existe a chave geral.
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 90 {
+			p.EspacoMinimoPct = n
 		}
 	}
 	return p
@@ -246,6 +259,15 @@ func (s *Servico) TalvezGuardar(ctx context.Context, v *store.PlayableVariant, a
 		novo.NuvemID = &nuvem.ID
 	}
 
+	// A conferência de espaço vem ANTES de enfileirar, e não na hora de baixar. Enfileirar o
+	// que não cabe encheria a fila de pedidos condenados a falhar, e o painel mostraria uma
+	// lista de erros onde a verdade é simplesmente "o disco encheu".
+	if destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID); err == nil {
+		if !s.HaOndeGuardar(ctx, pol, destino) {
+			return
+		}
+	}
+
 	arquivo, err := s.store.EnfileirarArquivo(ctx, novo)
 	if err != nil {
 		s.log.Warn("falha ao enfileirar cópia", "variant_id", v.ID, "erro", err)
@@ -267,4 +289,69 @@ func LerCredenciais(bruto []byte) (map[string]string, error) {
 		return nil, fmt.Errorf("credenciais em formato inesperado: %w", err)
 	}
 	return c, nil
+}
+
+// espacoMinimoPadrao é a folga exigida quando ninguém configurou nada: 10%.
+//
+// Não zero. Um armazenamento levado a 100% não é só um cache que parou de crescer — é um
+// disco onde o banco de dados não consegue mais escrever e o serviço inteiro cai. A folga
+// existe para proteger a máquina, não o cache.
+const espacoMinimoPadrao = 10
+
+// HaOndeGuardar decide se ainda cabe mais uma cópia.
+//
+// # Por que isto é a resposta certa para "quando encher, usar a fonte"
+//
+// A alternativa seria apagar acervo para caber a cópia nova. Mas a cópia nova é sempre a
+// menos merecedora: é a única do conjunto que ninguém ainda pediu duas vezes. Sacrificar um
+// filme com dez acessos por um com um seria piorar o cache por definição.
+//
+// Então, cheio, o sistema volta a intermediar da fonte — que é exatamente o que ele fazia
+// antes de o cache existir. Nada quebra; só deixa de melhorar.
+//
+// Na dúvida devolve `true`. Um armazenamento que não sabe informar o próprio tamanho (é o
+// caso das nuvens sem limite anunciado) não é motivo para desligar o cache.
+func (s *Servico) HaOndeGuardar(ctx context.Context, pol Politica, destino armazenamento.Backend) bool {
+	if pol.LimiteBytes > 0 {
+		usado, err := s.store.BytesEmCache(ctx, pol.Destino)
+		if err != nil {
+			s.log.Warn("falha ao medir o cache; seguindo sem o limite", "erro", err)
+		} else if usado >= pol.LimiteBytes {
+			s.log.Info("limite do cache atingido; a fonte volta a ser usada",
+				"usado", usado, "limite", pol.LimiteBytes)
+			return false
+		}
+	}
+
+	esp, err := destino.Espaco(ctx)
+	if err != nil || esp.Ilimitado || esp.Total <= 0 {
+		return true
+	}
+	// Inteiro e não ponto flutuante: `livre*100/total` é exato e não depende de
+	// arredondamento para decidir se o disco encheu.
+	livrePct := esp.Livre * 100 / esp.Total
+	if livrePct < int64(pol.EspacoMinimoPct) {
+		s.log.Info("armazenamento perto do limite; a fonte volta a ser usada",
+			"livre_pct", livrePct, "minimo_pct", pol.EspacoMinimoPct)
+		return false
+	}
+	return true
+}
+
+// backendDaPolitica resolve o destino padrão sem precisar de um arquivo já registrado.
+//
+// Existe porque a conferência de espaço acontece antes de haver linha no banco — e `Backend`
+// pede um `ArquivoGuardado`, que nesse instante ainda não existe.
+func (s *Servico) backendDaPolitica(ctx context.Context, pol Politica, nuvemID *int64) (armazenamento.Backend, error) {
+	if pol.Destino == store.BackendLocal {
+		b, ok := s.registro.Obter(armazenamento.ChaveLocal)
+		if !ok {
+			return nil, fmt.Errorf("%w: disco local", ErrSemBackend)
+		}
+		return b, nil
+	}
+	if nuvemID == nil {
+		return nil, fmt.Errorf("%w: destino na nuvem sem conta", ErrSemBackend)
+	}
+	return s.BackendDaNuvem(ctx, *nuvemID)
 }

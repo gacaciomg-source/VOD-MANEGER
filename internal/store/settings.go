@@ -59,6 +59,17 @@ const (
 	// caber outro, e na hora seguinte apaga o outro para rebaixar o primeiro. Gasta banda
 	// dos dois lados e não melhora nada.
 	SettingCacheIdadeMinimaHoras = "cache_idade_minima_horas"
+
+	// SettingCacheEspacoMinimoPct é a folga que o armazenamento nunca deixa de ter.
+	//
+	// Abaixo dela, o sistema PARA DE GUARDAR e volta a intermediar da fonte. Não é uma
+	// falha: é o comportamento correto quando não há mais para onde crescer, e é preferível
+	// a apagar acervo para caber mais um filme que ninguém pediu ainda.
+	//
+	// Em porcentagem, e não em bytes, porque a pergunta que se faz é sempre relativa —
+	// "quanto do disco ainda me sobra" —, e a resposta em bytes muda de sentido quando o
+	// disco muda de tamanho.
+	SettingCacheEspacoMinimoPct = "cache_espaco_minimo_pct"
 )
 
 // GetSetting lê uma configuração. Ausência não é erro: devolve o padrão.

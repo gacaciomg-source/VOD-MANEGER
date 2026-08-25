@@ -140,6 +140,10 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	streamID, err := p.abrirSessao(r, ped)
 	if err != nil {
 		p.log.Warn("não foi possível registrar a sessão", "erro", err)
+	} else if err := p.store.MarcarEntregaDoCache(r.Context(), streamID); err != nil {
+		// Só o rótulo da tela depende disto. Falhar aqui não pode interromper uma
+		// reprodução que já está saindo perfeitamente do disco.
+		p.log.Warn("falha ao marcar a entrega como cache", "stream_id", streamID, "erro", err)
 	}
 	ttfb := int(time.Since(inicio).Milliseconds())
 

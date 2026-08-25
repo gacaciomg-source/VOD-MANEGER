@@ -404,3 +404,15 @@ func (s *Store) ReleaseStaleStreams(ctx context.Context, nodeID string, maisVelh
 	}
 	return tag.RowsAffected(), nil
 }
+
+// MarcarEntregaDoCache anota que esta sessão saiu do acervo, e não da fonte.
+//
+// Escrito na ABERTURA, não no fechamento, porque a pergunta que este campo responde — "o
+// cache está sendo usado?" — se faz olhando o que está tocando AGORA. Um campo preenchido
+// só no fim deixaria a tela de Reproduções dizendo "direto da fonte" para todo mundo,
+// inclusive para quem está sendo servido do disco.
+func (s *Store) MarcarEntregaDoCache(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE streams SET cache_result = 'hit' WHERE id = $1`, id)
+	return wrapErr("marcando entrega do cache", err)
+}
