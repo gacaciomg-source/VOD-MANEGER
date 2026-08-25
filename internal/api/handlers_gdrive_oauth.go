@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -145,6 +146,23 @@ func (s *Server) handleIniciarOAuthDrive(w http.ResponseWriter, r *http.Request)
 	// por letra. Montá-lo aqui, a partir do endereço configurado, evita a divergência mais
 	// comum — o painel acessado por um endereço e o Google esperando outro.
 	redirect := strings.TrimRight(s.baseURL(r), "/") + caminhoRetorno
+
+	// O Google recusa endereço de retorno em HTTP puro, e recusa de um jeito que não ajuda:
+	// "Erro 400: invalid_request" numa tela dele, depois de a pessoa já ter criado o
+	// projeto, ativado a API e preenchido tudo aqui.
+	//
+	// Só `localhost` escapa da regra, porque lá não há o que interceptar.
+	//
+	// Recusar antes de mandar para o Google troca aquele erro sem contexto por uma frase
+	// que diz o que fazer — e economiza a ida e volta inteira.
+	if !enderecoAceitoPeloGoogle(redirect) {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "endereco_inseguro",
+			"o Google só aceita retorno em HTTPS, e o endereço público deste painel é "+
+				strings.TrimRight(s.baseURL(r), "/")+". Emita o certificado do domínio e, "+
+				"em Configurações, troque o endereço público para https:// antes de "+
+				"cadastrar a conta.", "endereco_publico")
+		return
+	}
 
 	var bruto [16]byte
 	if _, err := rand.Read(bruto[:]); err != nil {
@@ -342,4 +360,23 @@ func htmlSeguro(s string) string {
 	r := strings.NewReplacer(
 		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(s)
+}
+
+// enderecoAceitoPeloGoogle diz se o retorno serve como URI de redirecionamento.
+//
+// HTTPS sempre; HTTP só em localhost, que é a exceção que o próprio Google abre — ali não há
+// rede entre o navegador e o servidor para alguém interceptar.
+func enderecoAceitoPeloGoogle(endereco string) bool {
+	if strings.HasPrefix(endereco, "https://") {
+		return true
+	}
+	if !strings.HasPrefix(endereco, "http://") {
+		return false
+	}
+	resto := strings.TrimPrefix(endereco, "http://")
+	hospedeiro, _, _ := strings.Cut(resto, "/")
+	if h, _, err := net.SplitHostPort(hospedeiro); err == nil {
+		hospedeiro = h
+	}
+	return hospedeiro == "localhost" || hospedeiro == "127.0.0.1" || hospedeiro == "[::1]"
 }
