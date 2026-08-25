@@ -3082,6 +3082,15 @@ async function verAcervo() {
 
   ligarAcoesDoAcervo(resumo);
   desenharNuvens(resumo);
+
+  // Enquanto houver cópia em andamento, a tela acompanha sozinha.
+  //
+  // Só nesse caso: um acervo parado não muda, e redesenhar de dez em dez segundos uma lista
+  // que ninguém está alterando gasta banco e pisca a tela por nada. Com download em curso é
+  // o contrário — a porcentagem parada é indistinguível de travamento.
+  if (arquivos.some(a => a.estado === 'baixando' || a.estado === 'pendente')) {
+    agendarAtualizacao('acervo', 10000);
+  }
 }
 
 // linhaDoAcervo desenha um arquivo.
@@ -3115,7 +3124,16 @@ function linhaDoAcervo(a) {
         ${a.erro ? `<div class="dica" style="color:var(--erro)">${esc(a.erro)}</div>` : ''}
       </td>
       <td class="discreto">${onde}</td>
-      <td class="numero">${formatarBytes(a.bytes)}</td>
+      <td class="numero">
+        ${a.estado === 'baixando'
+          ? `<span class="discreto">${formatarBytes(a.bytes_baixados)}</span>
+             ${a.bytes_totais ? ` de ${formatarBytes(a.bytes_totais)}` : ''}
+             ${progresso !== null ? `
+               <div class="barra-uso" style="margin-top:4px">
+                 <div class="barra-uso-preenchida ok" style="width:${progresso}%"></div>
+               </div>` : ''}`
+          : formatarBytes(a.bytes)}
+      </td>
       <td class="numero">${num(a.acessos)}</td>
       <td><span class="etiqueta ${classe}">${rotulo}</span></td>
       <td><div class="grupo-botoes">

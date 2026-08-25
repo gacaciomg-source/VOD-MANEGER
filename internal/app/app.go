@@ -196,12 +196,24 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)
 
+	// O baixador consome a fila de copias. Existe so no Manager, e so quando ha
+	// sincronizacao — e o orquestrador que sabe montar a URL da fonte.
+	var baixador *acervo.Baixador
+	if scheduler != nil {
+		baixador = acervo.NovoBaixador(servicoAcervo, st, scheduler.Orchestrator(), log)
+	}
+
 	registro := roles.NewRegistry()
 	if err := registro.Register(apiModule); err != nil {
 		return err
 	}
 	if scheduler != nil {
 		if err := registro.Register(scheduler); err != nil {
+			return err
+		}
+	}
+	if baixador != nil {
+		if err := registro.Register(baixador); err != nil {
 			return err
 		}
 	}

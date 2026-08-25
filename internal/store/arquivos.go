@@ -482,3 +482,25 @@ func (s *Store) ResumoDoAcervo(ctx context.Context) ([]UsoDoAcervo, error) {
 	}
 	return out, wrapErr("resumindo o acervo", rows.Err())
 }
+
+// DevolverAFila põe uma cópia interrompida de volta como pendente.
+//
+// Serve ao desligamento do serviço: a cópia em curso é abortada, e marcá-la como ERRO seria
+// mentir — não houve falha, houve um `systemctl restart`. Como pendente, ela recomeça
+// sozinha na próxima subida.
+func (s *Store) DevolverAFila(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE arquivos_guardados SET estado = 'pendente', bytes_baixados = 0
+		 WHERE id = $1 AND estado = 'baixando'`, id)
+	return wrapErr("devolvendo a cópia à fila", err)
+}
+
+// AnotarTamanhoTotal registra o tamanho que a fonte anunciou.
+//
+// Gravado antes de a cópia começar: é dele que a tela tira a porcentagem, e sem ele o
+// progresso seria um número subindo sem fim à vista.
+func (s *Store) AnotarTamanhoTotal(ctx context.Context, id, total int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE arquivos_guardados SET bytes_totais = $2 WHERE id = $1`, id, total)
+	return wrapErr("anotando o tamanho total", err)
+}
