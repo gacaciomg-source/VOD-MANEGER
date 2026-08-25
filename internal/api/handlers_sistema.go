@@ -59,7 +59,14 @@ func (s *Server) handleFalhas(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, "listando falhas de reprodução")
 		return
 	}
-	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"falhas": falhas})
+	// O resumo por causa vai junto: sem ele a tela responde "o que falhou" e nao "por que",
+	// que e a pergunta que decide o que fazer.
+	resumo, err := s.deps.Store.ResumoDeFalhas(r.Context())
+	if err != nil {
+		s.fail(w, r, err, "resumindo falhas de reproducao")
+		return
+	}
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"falhas": falhas, "resumo": resumo})
 }
 
 // handleTrafego resume o volume entregue por período.

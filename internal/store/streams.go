@@ -419,3 +419,49 @@ func (s *Store) MarcarResultadoDoCache(ctx context.Context, id int64, resultado 
 		`UPDATE streams SET cache_result = $2 WHERE id = $1`, id, resultado)
 	return wrapErr("marcando o resultado do cache", err)
 }
+
+// CausaDeFalha é um motivo de falha com quantas vezes ele apareceu.
+type CausaDeFalha struct {
+	Codigo   string     `json:"codigo"`
+	Vezes    int64      `json:"vezes"`
+	Fontes   int64      `json:"fontes"`
+	UltimaEm *time.Time `json:"ultima_em"`
+}
+
+// ResumoDeFalhas agrupa as falhas por causa nas últimas 24 horas.
+//
+// # Por que a contagem, e não só a lista
+//
+// Uma lista de cem falhas responde "o que falhou". A pergunta que de fato governa a ação é
+// outra: "qual é o motivo predominante" — porque cada motivo pede uma providência
+// diferente, e a lista crua os embaralha em ordem cronológica.
+//
+// Trinta falhas de "a fonte parou no meio" numa fonte só é um problema de fornecedor.
+// Trinta de "falha no acervo" é disco. As duas listas parecem idênticas quando se olha
+// linha a linha.
+//
+// `cliente_desconectou` fica de fora: é o comportamento normal de quem fecha o player, e
+// somá-lo aqui afogaria tudo que importa.
+func (s *Store) ResumoDeFalhas(ctx context.Context) ([]CausaDeFalha, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT error_code, count(*), count(DISTINCT source_id), max(started_at)
+		FROM streams
+		WHERE started_at > now() - interval '24 hours'
+		  AND error_code <> '' AND error_code <> 'cliente_desconectou'
+		GROUP BY error_code
+		ORDER BY count(*) DESC`)
+	if err != nil {
+		return nil, wrapErr("resumindo falhas", err)
+	}
+	defer rows.Close()
+
+	out := []CausaDeFalha{}
+	for rows.Next() {
+		var c CausaDeFalha
+		if err := rows.Scan(&c.Codigo, &c.Vezes, &c.Fontes, &c.UltimaEm); err != nil {
+			return nil, wrapErr("resumindo falhas", err)
+		}
+		out = append(out, c)
+	}
+	return out, wrapErr("resumindo falhas", rows.Err())
+}

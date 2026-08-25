@@ -2108,14 +2108,66 @@ async function verDuplicatas() {
 // Tela: Falhas de reprodução
 // ---------------------------------------------------------------------------
 
-async function verFalhas() {
-  const { falhas } = await api('/falhas');
+// CAUSAS descreve cada código de falha e, sobretudo, DE QUEM é o problema.
+//
+// A segunda parte é a que faltava. Sem ela, toda falha parece igualmente nossa, e a reação
+// natural é procurar defeito no sistema — inclusive quando a fonte é que cortou a entrega, e
+// não há linha de código que conserte isso.
+//
+// A coluna `culpa` distingue três coisas que pedem providências opostas: `fonte` (o
+// fornecedor entregou mal), `nosso` (defeito ou limite desta instalação) e `cliente` (nada a
+// fazer, é comportamento de quem assiste).
+const CAUSAS = {
+  todas_as_origens_falharam: {
+    culpa: 'fonte', rotulo: 'Nenhuma fonte respondeu',
+    detalhe: 'Todas as origens deste conteúdo falharam. Costuma ser link morto ou credencial vencida.',
+  },
+  origem_indisponivel: {
+    culpa: 'fonte', rotulo: 'A fonte recusou ou não respondeu',
+    detalhe: 'A fonte não aceitou a conexão. Credencial, limite de conexões, ou fora do ar.',
+  },
+  fonte_nao_enviou_dados: {
+    culpa: 'fonte', rotulo: 'A fonte aceitou e não enviou nada',
+    detalhe: 'A conexão abriu e nenhum byte veio. Quase sempre é cadastro: credencial ou link errado.',
+  },
+  fonte_parou_no_meio: {
+    culpa: 'fonte', rotulo: 'A fonte parou de enviar no meio',
+    detalhe: 'Começou bem e travou. É a fonte engasgando sob carga — aparece em rajadas no mesmo horário.',
+  },
+  fonte_entregou_menos: {
+    culpa: 'fonte', rotulo: 'A fonte cortou antes do fim',
+    detalhe: 'Ela encerrou antes de entregar o tamanho que anunciou. O filme para no meio e o player volta ao começo. É a falha mais comum de fonte sob carga — e o cache é o que a elimina, porque um arquivo guardado não pode ser cortado.',
+  },
+  video_de_manutencao: {
+    culpa: 'fonte', rotulo: 'A fonte devolveu vídeo de manutenção',
+    detalhe: 'Veio um arquivo curto no lugar do filme. O sistema detectou e tentou a próxima origem.',
+  },
+  falha_no_acervo: {
+    culpa: 'nosso', rotulo: 'Falha ao ler o arquivo guardado',
+    detalhe: 'Disco com problema, ou conta de nuvem fora. A reprodução caiu de volta para a fonte.',
+  },
+  falha_na_copia: {
+    culpa: 'nosso', rotulo: 'A transmissão foi interrompida',
+    detalhe: 'Erro não classificado durante a entrega. Vale olhar o registro do serviço.',
+  },
+  sessao_abandonada: {
+    culpa: 'nosso', rotulo: 'Sessão ficou aberta tempo demais',
+    detalhe: 'Encerrada pela faxina. Ocupava vaga na credencial sem estar entregando nada.',
+  },
+  processo_encerrado: {
+    culpa: 'nosso', rotulo: 'O serviço reiniciou durante a reprodução',
+    detalhe: 'Esperado logo após uma atualização. Em outro momento, investigue por que ele caiu.',
+  },
+  cliente_desconectou: {
+    culpa: 'cliente', rotulo: 'O espectador fechou o player',
+    detalhe: 'Comportamento normal de quem assiste. Não é falha.',
+  },
+};
 
-  const explicar = c => ({
-    todas_as_origens_falharam: 'Nenhuma fonte respondeu',
-    falha_na_copia: 'A transmissão foi interrompida no meio',
-    origem_indisponivel: 'A fonte recusou ou não respondeu',
-  }[c] || c || 'erro não identificado');
+async function verFalhas() {
+  const { falhas, resumo } = await api('/falhas');
+
+  const explicar = c => (CAUSAS[c] || {}).rotulo || c || 'erro não identificado';
 
   $('#visao').innerHTML = `
     <p class="discreto" style="margin:0 0 14px">
@@ -2125,6 +2177,8 @@ async function verFalhas() {
       Player fechado no meio do filme não aparece aqui: é o comportamento normal de quem
       assiste, e listá-lo afogaria os problemas de verdade.
     </p>
+
+    ${resumoDeFalhas(resumo)}
 
     ${falhas.length ? `
       <div class="tabela-wrap"><table>
@@ -4532,5 +4586,71 @@ function cartaoDeFontesDoCache(fontes) {
           </tr>`).join('')}
         </tbody>
       </table></div>
+    </div>`;
+}
+
+/**
+ * O resumo por causa, no topo das Falhas.
+ *
+ * Existe para responder a pergunta que a lista crua não responde: qual é o motivo
+ * PREDOMINANTE. Cem linhas em ordem cronológica embaralham trinta falhas de fonte com duas
+ * de disco, e as duas pedem providências opostas.
+ *
+ * O veredito no fim é a parte que mais importa. Quando a maioria das falhas é da fonte, não
+ * há ajuste no sistema que as remova — e saber disso evita procurar defeito onde não há.
+ */
+function resumoDeFalhas(resumo) {
+  if (!Array.isArray(resumo) || !resumo.length) {
+    return `<div class="cartao"><div class="veredito ok" style="margin:0">
+      <b>Nenhuma falha nas últimas 24 horas.</b>
+      Toda reprodução que começou, entregou vídeo.
+    </div></div>`;
+  }
+
+  const total = resumo.reduce((s, c) => s + c.vezes, 0);
+  const deFonte = resumo
+    .filter(c => (CAUSAS[c.codigo] || {}).culpa === 'fonte')
+    .reduce((s, c) => s + c.vezes, 0);
+  const pctFonte = Math.round((deFonte / total) * 100);
+
+  const etiquetaCulpa = {
+    fonte: ['alerta', 'da fonte'],
+    nosso: ['erro', 'do sistema'],
+    cliente: ['neutro', 'do espectador'],
+  };
+
+  return `
+    <div class="cartao">
+      <h2>Por que falhou — últimas 24 horas</h2>
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Causa</th><th style="width:1%">Origem</th>
+          <th class="numero">Vezes</th><th class="numero">Fontes</th>
+        </tr></thead>
+        <tbody>${resumo.map(c => {
+          const info = CAUSAS[c.codigo] || {};
+          const [classe, rotulo] = etiquetaCulpa[info.culpa] || ['neutro', '—'];
+          return `<tr>
+            <td>
+              <b>${esc(info.rotulo || c.codigo)}</b>
+              ${info.detalhe ? `<div class="dica">${esc(info.detalhe)}</div>` : ''}
+            </td>
+            <td><span class="etiqueta ${classe}">${rotulo}</span></td>
+            <td class="numero">${num(c.vezes)}</td>
+            <td class="numero">${num(c.fontes)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+
+      <div class="veredito ${pctFonte >= 70 ? 'alerta' : 'info'}" style="margin:12px 0 0">
+        ${pctFonte >= 70
+          ? `<b>${pctFonte}% das falhas vieram das fontes</b>, não do sistema. Nenhum ajuste
+             aqui as remove — quem cortou a entrega foi o fornecedor.
+             <br><br>
+             O que muda esse número é o <b>cache</b>: um arquivo guardado no seu disco não
+             pode ser cortado no meio, e não depende da fonte estar de pé na hora.`
+          : `<b>${100 - pctFonte}% das falhas são do sistema ou de sessões abandonadas.</b>
+             Vale olhar o registro do serviço — isto não se explica pela fonte.`}
+      </div>
     </div>`;
 }

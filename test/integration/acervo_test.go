@@ -154,3 +154,21 @@ func TestTituloDeEpisodioTrazASerie(t *testing.T) {
 		t.Errorf("titulo = %q, queria %q", arquivos[0].Titulo, quer)
 	}
 }
+
+// TestResumoDeFalhasExecuta garante que a consulta do resumo roda de verdade contra o
+// Postgres.
+//
+// Existe porque este projeto já perdeu uma tela inteira para uma consulta que compilava e
+// não executava: `id` ambíguo numa junção. Compilar não prova nada sobre SQL — só executar
+// prova.
+func TestResumoDeFalhasExecuta(t *testing.T) {
+	env := newTestEnv(t)
+
+	causas, err := env.Store.ResumoDeFalhas(context.Background())
+	if err != nil {
+		t.Fatalf("ResumoDeFalhas: %v", err)
+	}
+	if causas == nil {
+		t.Fatal("o resumo precisa ser uma lista vazia, e nunca nula: a tela itera sobre ela")
+	}
+}
