@@ -2982,10 +2982,12 @@ async function recarregarAcervo() {
 }
 
 async function verAcervo() {
-  const [resumo, { arquivos }, fontes] = await Promise.all([
-    api('/acervo'),
-    api('/acervo/arquivos?limit=300&origem=' + estadoAcervo.aba),
-    api('/sources'),
+  const [resumo, { arquivos }, { sources }] = await Promise.all([
+    api("/acervo"),
+    api("/acervo/arquivos?limit=300&origem=" + estadoAcervo.aba),
+    // A tela do Acervo nao pode cair porque a lista de fontes falhou: o acervo em si
+    // continua servindo, e o cartao de fontes e informativo.
+    api("/sources").catch(() => ({ sources: [] })),
   ]);
 
   const porOrigem = origem => resumo.resumo
@@ -3033,7 +3035,7 @@ async function verAcervo() {
         </div>` : ''}
     </div>
 
-    ${cartaoDeFontesDoCache(fontes)}
+    ${cartaoDeFontesDoCache(sources)}
 
     <div class="cartao">
       <h2>Contas de nuvem</h2>
@@ -4488,7 +4490,10 @@ window.fecharModal = fecharModal;
  * convite a que os dois discordassem.
  */
 function cartaoDeFontesDoCache(fontes) {
-  const lista = (fontes || []).filter(f => f.kind !== 'proprio');
+  // Array.isArray, e nao `fontes || []`: a resposta de /sources vem embrulhada num objeto, e
+  // um objeto e tao verdadeiro quanto uma lista. A versao anterior derrubava a tela inteira
+  // do Acervo com "filter is not a function" — um cartao informativo nao pode fazer isso.
+  const lista = (Array.isArray(fontes) ? fontes : []).filter(f => f.kind !== "proprio");
   if (!lista.length) return '';
 
   const ordenadas = [...lista].sort((a, b) => (a.priority - b.priority) || a.name.localeCompare(b.name));
