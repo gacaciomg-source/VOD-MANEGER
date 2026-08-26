@@ -756,3 +756,46 @@ func (s *Store) MarcarCopiasTruncadas(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DiagnosticoDaLimpeza explica por que a limpeza não está liberando espaço.
+type DiagnosticoDaLimpeza struct {
+	// Candidatos são as cópias que a limpeza PODERIA apagar agora.
+	Candidatos int64 `json:"candidatos"`
+	// SeguradosPelaCarencia são cache descartável que só a carência está protegendo.
+	SeguradosPelaCarencia int64 `json:"segurados_pela_carencia"`
+	// Protegidos e Proprios nunca entram na limpeza, e é útil vê-los separados: são a
+	// resposta a "por que o disco está cheio e nada é apagado".
+	Protegidos int64 `json:"protegidos"`
+	Proprios   int64 `json:"proprios"`
+}
+
+// ExplicarLimpeza conta o acervo pelas categorias que decidem a limpeza.
+//
+// # Por que isto existe
+//
+// "A limpeza não está liberando espaço" tem quatro causas possíveis, e elas pedem ações
+// opostas: diminuir a carência, desproteger algo, apagar acervo próprio à mão, ou nada —
+// porque de fato ainda há espaço.
+//
+// Sem esta contagem, as quatro são indistinguíveis de fora, e a única saída é ler o código.
+// Foi assim que várias coisas neste sistema ficaram sem explicação até alguém perguntar.
+func (s *Store) ExplicarLimpeza(ctx context.Context, idadeMinima time.Duration) (*DiagnosticoDaLimpeza, error) {
+	var d DiagnosticoDaLimpeza
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (
+				WHERE origem = 'fonte' AND NOT protegido
+				  AND concluido_em < now() - $1::interval),
+			count(*) FILTER (
+				WHERE origem = 'fonte' AND NOT protegido
+				  AND concluido_em >= now() - $1::interval),
+			count(*) FILTER (WHERE protegido),
+			count(*) FILTER (WHERE origem = 'proprio')
+		FROM arquivos_guardados
+		WHERE estado = 'pronto'`, idadeMinima.String()).
+		Scan(&d.Candidatos, &d.SeguradosPelaCarencia, &d.Protegidos, &d.Proprios)
+	if err != nil {
+		return nil, wrapErr("explicando a limpeza", err)
+	}
+	return &d, nil
+}

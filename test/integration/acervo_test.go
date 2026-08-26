@@ -200,6 +200,9 @@ func TestConsultasDeCamadaExecutam(t *testing.T) {
 		t.Fatalf("MudarDeCamada num id inexistente devia recusar, veio: %v", err)
 	}
 
+	if _, err := env.Store.ExplicarLimpeza(ctx, 24*time.Hour); err != nil {
+		t.Fatalf("ExplicarLimpeza: %v", err)
+	}
 	if _, err := env.Store.BytesEmCache(ctx, store.BackendLocal); err != nil {
 		t.Fatalf("BytesEmCache: %v", err)
 	}

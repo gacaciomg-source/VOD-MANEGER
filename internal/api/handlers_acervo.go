@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/store"
@@ -72,9 +73,33 @@ func (s *Server) handleAcervoResumo(w http.ResponseWriter, r *http.Request) {
 					dados["pasta"] = l.Raiz()
 				}
 				corpo["espaco_local"] = dados
+
+				// Aperto = a limpeza esta (ou deveria estar) rodando. So nesse estado a
+				// explicacao interessa; com disco sobrando ela seria ruido.
+				if !esp.Ilimitado && esp.Total > 0 {
+					dados["apertado"] = esp.Livre*100/esp.Total < 15
+				}
 			}
 		}
 	}
+	// Por que a limpeza nao esta liberando espaco.
+	//
+	// Quatro causas possiveis, com acoes opostas: diminuir a carencia, desproteger algo,
+	// apagar acervo proprio a mao, ou nada — porque de fato ainda ha espaco. De fora elas
+	// sao indistinguiveis, e a unica saida seria ler o codigo.
+	if s.deps.Store != nil {
+		carencia := 24 * time.Hour
+		if v, err := s.deps.Store.GetSetting(r.Context(), store.SettingCacheIdadeMinimaHoras, "24"); err == nil {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				carencia = time.Duration(n) * time.Hour
+			}
+		}
+		if d, err := s.deps.Store.ExplicarLimpeza(r.Context(), carencia); err == nil {
+			corpo["limpeza"] = d
+			corpo["carencia_horas"] = int(carencia / time.Hour)
+		}
+	}
+
 	writeJSON(w, s.deps.Log, http.StatusOK, corpo)
 }
 

@@ -3092,6 +3092,8 @@ async function verAcervo() {
         </div>` : ''}
     </div>
 
+    ${avisoDaLimpeza(resumo)}
+
     ${cartaoDeFontesDoCache(sources)}
 
     <div class="cartao">
@@ -4692,4 +4694,57 @@ function resumoDeFalhas(resumo) {
              Vale olhar o registro do serviço — isto não se explica pela fonte.`}
       </div>
     </div>`;
+}
+
+/**
+ * Por que a limpeza não está liberando espaço.
+ *
+ * Só aparece com o armazenamento apertado — com disco sobrando, a limpeza não roda mesmo, e
+ * dizer isso seria ruído.
+ *
+ * A pergunta "está cheio e nada é apagado" tem quatro respostas com ações opostas, e de fora
+ * elas são indistinguíveis. Esse silêncio já custou tempo neste sistema mais de uma vez: a
+ * fila sem baixador, o "removendo" sem removedor. Aqui a tela diz qual é.
+ */
+function avisoDaLimpeza(resumo) {
+  const esp = resumo.espaco_local;
+  const d = resumo.limpeza;
+  if (!esp || !esp.apertado || !d) return '';
+
+  const horas = resumo.carencia_horas != null ? resumo.carencia_horas : 24;
+
+  if (d.candidatos > 0) {
+    return `<div class="cartao"><div class="veredito info" style="margin:0">
+      <b>Armazenamento apertado — a limpeza está trabalhando.</b>
+      Há <b>${num(d.candidatos)}</b> cópia(s) que ela pode apagar, começando pelas menos
+      usadas. Isso acontece em segundo plano, algumas por minuto.
+    </div></div>`;
+  }
+
+  if (d.segurados_pela_carencia > 0) {
+    return `<div class="cartao"><div class="veredito alerta" style="margin:0">
+      <b>A limpeza não tem o que apagar: a carência está segurando tudo.</b>
+      <br><br>
+      Há <b>${num(d.segurados_pela_carencia)}</b> cópia(s) de cache no disco, mas todas têm
+      menos de <b>${num(horas)}h</b> — e a carência as protege para o cache não entrar em
+      vaivém.
+      <br><br>
+      Com um disco pequeno, ${num(horas)}h é tempo demais: ele enche em horas, não em dias.
+      Diminua a carência em <b>Configurações → Armazenamento de mídia</b> — algo entre
+      <b>2h e 6h</b> costuma ser o certo aqui. Enquanto isso, o sistema simplesmente para de
+      guardar e continua servindo da fonte.
+    </div></div>`;
+  }
+
+  const so = [];
+  if (d.proprios > 0) so.push(`<b>${num(d.proprios)}</b> do seu acervo próprio`);
+  if (d.protegidos > 0) so.push(`<b>${num(d.protegidos)}</b> protegida(s)`);
+
+  return `<div class="cartao"><div class="veredito alerta" style="margin:0">
+    <b>A limpeza não tem o que apagar.</b>
+    ${so.length
+      ? `O que resta no disco é ${so.join(' e ')} — e a limpeza automática nunca toca nesses.
+         Apagar é decisão sua, aqui embaixo.`
+      : 'Não há cópias de cache no disco. O espaço está sendo usado por outra coisa nesta máquina.'}
+  </div></div>`;
 }
