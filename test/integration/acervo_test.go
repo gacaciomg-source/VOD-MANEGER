@@ -210,3 +210,57 @@ func TestConsultasDeCamadaExecutam(t *testing.T) {
 		t.Fatalf("DestravarCopiasPendentes: %v", err)
 	}
 }
+
+// TestCicloDaContaDeNuvemExecuta percorre o cadastro de uma conta de ponta a ponta.
+//
+// Este teste nasceu de um defeito que só apareceu em produção, e no pior instante possível:
+// o Google já tinha autorizado, e o cadastro falhava com
+// "missing FROM-clause entry for table n". A lista de colunas era uma constante única, já
+// qualificada com `n.` — o que funciona no SELECT com junção e é inválido no RETURNING de um
+// INSERT, que não tem apelido de tabela.
+//
+// O consentimento do Google se gasta a cada tentativa, então o custo do defeito não era um
+// erro na tela: era refazer o fluxo inteiro sem saber por quê.
+//
+// Compilar não pega isso. Só executar pega.
+func TestCicloDaContaDeNuvemExecuta(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	nuvem, err := env.Store.CriarNuvem(ctx, store.NovaNuvem{
+		Nome:        "conta-de-teste",
+		Provedor:    store.ProvedorGDrive,
+		Credenciais: []byte("cifrado-de-mentira"),
+	})
+	if err != nil {
+		t.Fatalf("CriarNuvem: %v", err)
+	}
+	if nuvem.Nome != "conta-de-teste" {
+		t.Fatalf("a conta voltou com o nome errado: %q", nuvem.Nome)
+	}
+
+	// As colunas precisam cair nos campos certos. Uma lista lida fora de ordem passaria
+	// silenciosamente no INSERT e só apareceria como dado trocado muito depois.
+	if nuvem.Provedor != store.ProvedorGDrive || nuvem.Ordem != 100 {
+		t.Fatalf("colunas fora de ordem: provedor=%q ordem=%d", nuvem.Provedor, nuvem.Ordem)
+	}
+
+	if _, err := env.Store.NuvemPorID(ctx, nuvem.ID); err != nil {
+		t.Fatalf("NuvemPorID: %v", err)
+	}
+	if _, err := env.Store.ListarNuvens(ctx); err != nil {
+		t.Fatalf("ListarNuvens: %v", err)
+	}
+	if _, err := env.Store.NuvemParaGravar(ctx, 0); err != nil {
+		t.Fatalf("NuvemParaGravar: %v", err)
+	}
+
+	somenteLeitura := true
+	if _, err := env.Store.AtualizarNuvem(ctx, nuvem.ID,
+		store.AjusteDeNuvem{SomenteLeitura: &somenteLeitura}); err != nil {
+		t.Fatalf("AtualizarNuvem: %v", err)
+	}
+	if err := env.Store.RemoverNuvem(ctx, nuvem.ID); err != nil {
+		t.Fatalf("RemoverNuvem: %v", err)
+	}
+}

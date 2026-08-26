@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,9 +51,31 @@ type Nuvem struct {
 // acervo que está lá dentro.
 func (n *Nuvem) PodeReceber() bool { return n.Ativa && !n.SomenteLeitura }
 
-const colunasNuvem = `n.id, n.nome, n.provedor, n.pasta_raiz, n.ativa, n.somente_leitura,
-	n.ordem, n.bytes_usados, n.bytes_totais, n.medida_em, n.ultimo_erro, n.ultimo_erro_em,
-	n.criado_em`
+// camposNuvem é a ordem em que as colunas são lidas. Uma lista só, para que a leitura e as
+// consultas não possam divergir.
+var camposNuvem = []string{
+	"id", "nome", "provedor", "pasta_raiz", "ativa", "somente_leitura",
+	"ordem", "bytes_usados", "bytes_totais", "medida_em", "ultimo_erro", "ultimo_erro_em",
+	"criado_em",
+}
+
+// colunasNuvem serve ao RETURNING de INSERT e UPDATE, que NÃO têm apelido de tabela.
+//
+// Esta separação existe por um defeito real: a lista era uma constante única já qualificada
+// com `n.`, o que funciona no SELECT com junção e explode no RETURNING — "missing FROM-clause
+// entry for table n". O cadastro de conta de nuvem falhava DEPOIS de o Google já ter
+// autorizado, que é o pior momento possível: o consentimento se gasta e é preciso refazer
+// tudo.
+var colunasNuvem = strings.Join(camposNuvem, ", ")
+
+// colunasNuvemDe qualifica as colunas com o apelido, para as consultas com junção.
+func colunasNuvemDe(apelido string) string {
+	qualificadas := make([]string, len(camposNuvem))
+	for i, campo := range camposNuvem {
+		qualificadas[i] = apelido + "." + campo
+	}
+	return strings.Join(qualificadas, ", ")
+}
 
 func lerNuvem(linha pgx.Row, comAcervo bool) (*Nuvem, error) {
 	var n Nuvem
@@ -72,7 +95,7 @@ func lerNuvem(linha pgx.Row, comAcervo bool) (*Nuvem, error) {
 // ListarNuvens devolve as contas com o que cada uma guarda.
 func (s *Store) ListarNuvens(ctx context.Context) ([]Nuvem, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+colunasNuvem+`,
+		SELECT `+colunasNuvemDe("n")+`,
 		       coalesce(a.arquivos, 0), coalesce(a.bytes, 0)
 		FROM nuvens n
 		LEFT JOIN (
@@ -101,7 +124,7 @@ func (s *Store) ListarNuvens(ctx context.Context) ([]Nuvem, error) {
 // NuvemPorID devolve uma conta.
 func (s *Store) NuvemPorID(ctx context.Context, id int64) (*Nuvem, error) {
 	n, err := lerNuvem(s.pool.QueryRow(ctx,
-		`SELECT `+colunasNuvem+` FROM nuvens n WHERE n.id = $1`, id), false)
+		`SELECT `+colunasNuvemDe("n")+` FROM nuvens n WHERE n.id = $1`, id), false)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
@@ -123,7 +146,7 @@ func (s *Store) NuvemPorID(ctx context.Context, id int64) (*Nuvem, error) {
 // recusar por falta de medição deixaria uma conta nova inútil até a primeira medição.
 func (s *Store) NuvemParaGravar(ctx context.Context, bytesNecessarios int64) (*Nuvem, error) {
 	n, err := lerNuvem(s.pool.QueryRow(ctx, `
-		SELECT `+colunasNuvem+`
+		SELECT `+colunasNuvemDe("n")+`
 		FROM nuvens n
 		WHERE n.ativa AND NOT n.somente_leitura
 		  AND (n.bytes_totais IS NULL OR n.bytes_usados IS NULL
