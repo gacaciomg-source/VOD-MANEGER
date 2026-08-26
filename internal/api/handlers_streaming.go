@@ -311,7 +311,12 @@ func (s *Server) handleCredentialLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A credencial manda quando traz endereco proprio: os links exibidos aqui tem de ser
+	// exatamente os que o cliente vai receber na lista.
 	base := s.baseURLConteudo(r)
+	if cred.BaseURLOverride != "" {
+		base = strings.TrimRight(cred.BaseURLOverride, "/")
+	}
 	senha := s.senhaDeStream(cred)
 
 	resposta := map[string]any{
@@ -351,6 +356,8 @@ type patchCredencialRequest struct {
 	BytesLimitGB *float64 `json:"bytes_limit_gb"`
 	Ciclo        *string  `json:"ciclo"`
 	ZerarCiclo   bool     `json:"zerar_ciclo"`
+	// BaseURLOverride troca o endereco dos links desta credencial. Vazio volta ao global.
+	BaseURLOverride *string `json:"base_url_override"`
 }
 
 // bytesPorGB usa a base binária (1024), que é a mesma que o painel usa para exibir. Um
@@ -386,9 +393,18 @@ func (s *Server) handleUpdateStreamCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if req.BaseURLOverride != nil && !enderecoDeEntregaValido(*req.BaseURLOverride) {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+			"o endereço precisa começar com http:// ou https:// — sem isso os links saem "+
+				"relativos e nenhum player os resolve; deixe em branco para usar o endereço "+
+				"de conteúdo global", "base_url_override")
+		return
+	}
+
 	patch := store.StreamCredentialPatch{
 		Name: req.Name, Description: req.Description, Enabled: req.Enabled,
 		AllowedCIDRs: req.AllowedCIDRs, Ciclo: req.Ciclo, ZerarCiclo: req.ZerarCiclo,
+		BaseURLOverride: req.BaseURLOverride,
 	}
 	if req.BytesLimitGB != nil {
 		// Zero significa "sem limite": é mais natural que apagar o campo, e evita a
@@ -831,4 +847,20 @@ func (s *Server) baseURLConteudo(r *http.Request) string {
 		return strings.TrimRight(v, "/")
 	}
 	return s.baseURL(r)
+}
+
+// enderecoDeEntregaValido confere o endereço por credencial.
+//
+// Vazio é válido: significa "use o endereço global", que é o caso normal.
+//
+// A exigência do esquema não é formalidade. "vod.exemplo.com" digitado sem o `https://` — que
+// é o erro natural — produziria links relativos: a lista baixa, o catálogo aparece completo, e
+// nada toca. Recusar aqui troca esse silêncio por uma frase.
+func enderecoDeEntregaValido(endereco string) bool {
+	e := strings.TrimSpace(endereco)
+	if e == "" {
+		return true
+	}
+	u, err := url.Parse(e)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }

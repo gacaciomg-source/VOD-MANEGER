@@ -145,7 +145,7 @@ func (s *Server) handleIniciarOAuthDrive(w http.ResponseWriter, r *http.Request)
 	// O endereço de retorno precisa ser EXATAMENTE o que está cadastrado no Google, letra
 	// por letra. Montá-lo aqui, a partir do endereço configurado, evita a divergência mais
 	// comum — o painel acessado por um endereço e o Google esperando outro.
-	redirect := strings.TrimRight(s.baseURL(r), "/") + caminhoRetorno
+	redirect := strings.TrimRight(s.enderecoDoRetornoOAuth(r), "/") + caminhoRetorno
 
 	// O Google recusa endereço de retorno em HTTP puro, e recusa de um jeito que não ajuda:
 	// "Erro 400: invalid_request" numa tela dele, depois de a pessoa já ter criado o
@@ -157,8 +157,9 @@ func (s *Server) handleIniciarOAuthDrive(w http.ResponseWriter, r *http.Request)
 	// que diz o que fazer — e economiza a ida e volta inteira.
 	if !enderecoAceitoPeloGoogle(redirect) {
 		writeError(w, s.deps.Log, http.StatusBadRequest, "endereco_inseguro",
-			"o Google só aceita retorno em HTTPS, e o endereço público deste painel é "+
-				strings.TrimRight(s.baseURL(r), "/")+". Emita o certificado do domínio e, "+
+			"o Google só aceita retorno em HTTPS, e este painel está sendo acessado por "+
+				strings.TrimRight(s.enderecoDoRetornoOAuth(r), "/")+". Abra o painel pelo "+
+				"domínio com certificado, ou emita o certificado e, "+
 				"em Configurações, troque o endereço público para https:// antes de "+
 				"cadastrar a conta.", "endereco_publico")
 		return
@@ -379,4 +380,29 @@ func enderecoAceitoPeloGoogle(endereco string) bool {
 		hospedeiro = h
 	}
 	return hospedeiro == "localhost" || hospedeiro == "127.0.0.1" || hospedeiro == "[::1]"
+}
+
+// enderecoDoRetornoOAuth escolhe por onde o Google devolve a autorização.
+//
+// # Por que não é o endereço público configurado
+//
+// O retorno do Google não chega ao servidor por conta própria: ele volta pelo NAVEGADOR de
+// quem autorizou. Então o endereço que importa é aquele por onde a pessoa está vendo o painel
+// AGORA — e não o que está gravado nas configurações.
+//
+// Os dois divergem no caso normal, e não por engano. É comum servir o conteúdo por IP, para
+// os clientes não passarem por uma camada extra de proxy, e administrar por domínio com
+// certificado. Nessa montagem o endereço público é o IP em HTTP — que o Google recusa — mesmo
+// com o painel abrindo em HTTPS.
+//
+// Usar o endereço da requisição resolve os dois problemas de uma vez: ele é HTTPS, e é
+// provadamente o que vai receber o retorno.
+//
+// Só quando é HTTPS. Em HTTP puro o cabeçalho `Host` é palavra de quem pediu, e não há TLS
+// que a confirme — aí vale o que está configurado, que ao menos foi decidido por alguém.
+func (s *Server) enderecoDoRetornoOAuth(r *http.Request) string {
+	if atual := s.enderecoDaRequisicao(r); strings.HasPrefix(atual, "https://") {
+		return atual
+	}
+	return s.baseURL(r)
 }

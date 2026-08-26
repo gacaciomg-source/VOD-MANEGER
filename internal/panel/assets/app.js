@@ -4262,6 +4262,21 @@ function formularioEditarCredencial(c) {
         um pacote extra".
       </p>` : ''}
 
+    <div class="secao-titulo" style="margin:18px 0 8px">Endereço de entrega</div>
+    <label>Endereço só desta credencial (opcional)
+      <input id="ec-base" placeholder="https://vod.exemplo.com  ou  http://203.0.113.9:8080"
+             value="${esc(c.base_url_override || '')}">
+    </label>
+    <p class="dica">
+      Em branco usa o endereço de conteúdo global — o caso normal.
+      <br>
+      Preencha para dar a <b>este cliente</b> um caminho próprio: por exemplo o IP direto, sem
+      passar pelo proxy reverso, para quem você confia e cujo player não se importa com
+      certificado. Precisa começar com <b>http://</b> ou <b>https://</b>.
+      <br>
+      Lembre que um IP não sobrevive a uma troca de máquina, e o domínio sim.
+    </p>
+
     <div class="secao-titulo" style="margin:18px 0 8px">Estado</div>
     <label class="linha-check">
       <input type="checkbox" id="ec-ativa" ${c.enabled ? 'checked' : ''}> Credencial ativa
@@ -4295,6 +4310,7 @@ function formularioEditarCredencial(c) {
         bytes_limit_gb: cota === '' ? 0 : Number(cota),
         ciclo: corpo.querySelector('#ec-ciclo').value,
         zerar_ciclo: !!(zerar && zerar.checked),
+        base_url_override: corpo.querySelector("#ec-base").value.trim(),
       };
       try {
         await api(`/stream-credentials/${c.id}`, { method: 'PATCH', corpo: dados });

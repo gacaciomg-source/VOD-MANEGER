@@ -130,7 +130,7 @@ func (h *Handler) handleM3U(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
-	esc := NovoEscritorM3U(w, h.deps.BaseURL(r), s.user, s.senha)
+	esc := NovoEscritorM3U(w, h.baseDaCredencial(r, s), s.user, s.senha)
 	inicio := time.Now()
 
 	if incluirFilmes {
@@ -222,7 +222,7 @@ func (h *Handler) handshake(r *http.Request, s *sessao) map[string]any {
 		maxCon = strconv.Itoa(*s.cred.MaxConnections)
 	}
 
-	base := h.deps.BaseURL(r)
+	base := h.baseDaCredencial(r, s)
 	esquema, host, porta := partesDoEndereco(base)
 
 	usuario := UsuarioXtream{
@@ -489,4 +489,18 @@ func partesDoEndereco(base string) (esquema, host, porta string) {
 		return esquema, resto, "443"
 	}
 	return esquema, resto, "80"
+}
+
+// baseDaCredencial escolhe o endereço que vai nos links DESTA credencial.
+//
+// A credencial manda quando traz endereço próprio. É o que permite servir a maioria por
+// domínio — com TLS e proxy reverso, que sobrevive a uma troca de máquina — e alguns poucos
+// clientes conhecidos por IP direto, onde a camada extra não se paga.
+//
+// Vazio é o caso normal e cai no endereço de conteúdo global.
+func (h *Handler) baseDaCredencial(r *http.Request, s *sessao) string {
+	if s != nil && s.cred != nil && s.cred.BaseURLOverride != "" {
+		return strings.TrimRight(s.cred.BaseURLOverride, "/")
+	}
+	return h.deps.BaseURL(r)
 }

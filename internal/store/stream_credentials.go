@@ -34,8 +34,15 @@ type StreamCredential struct {
 	// continua sendo o total histórico, que diz se vale renovar o contrato.
 	BytesCiclo  int64     `json:"bytes_ciclo"`
 	CicloInicio time.Time `json:"ciclo_inicio"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// BaseURLOverride e o endereco usado NOS LINKS desta credencial. Vazio usa o
+	// endereco de conteudo global — o caso normal.
+	//
+	// Existe para a montagem em que dominio e IP servem publicos diferentes: o dominio,
+	// com TLS e proxy reverso, para a maioria; o IP direto para poucos clientes conhecidos,
+	// onde a camada extra nao se paga.
+	BaseURLOverride string    `json:"base_url_override"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Ativa informa se a credencial pode ser usada agora.
@@ -92,7 +99,7 @@ func (c *StreamCredential) BytesRestantes(agora time.Time) int64 {
 const streamCredentialColumns = `id, name, description, username, password_hmac, password_enc, key_version,
 	enabled, revoked_at, expires_at, max_connections, allowed_cidrs,
 	last_used_at, use_count, bytes_served, bytes_limit, ciclo, bytes_ciclo, ciclo_inicio,
-	created_at, updated_at`
+	created_at, updated_at, base_url_override`
 
 func scanStreamCredential(row rowScanner) (*StreamCredential, error) {
 	var c StreamCredential
@@ -100,7 +107,7 @@ func scanStreamCredential(row rowScanner) (*StreamCredential, error) {
 		&c.PasswordEnc, &c.KeyVersion, &c.Enabled, &c.RevokedAt, &c.ExpiresAt, &c.MaxConnections,
 		&c.AllowedCIDRs, &c.LastUsedAt, &c.UseCount, &c.BytesServed,
 		&c.BytesLimit, &c.Ciclo, &c.BytesCiclo, &c.CicloInicio,
-		&c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.CreatedAt, &c.UpdatedAt, &c.BaseURLOverride); err != nil {
 		return nil, err
 	}
 	if c.AllowedCIDRs == nil {
@@ -184,6 +191,9 @@ type StreamCredentialPatch struct {
 	// ZerarCiclo recomeça a contagem sem esperar a virada do mês. É o que o administrador
 	// faz quando o cliente paga um pacote extra no meio do período.
 	ZerarCiclo bool
+	// BaseURLOverride troca o endereco dos links desta credencial. Ponteiro para
+	// distinguir "nao mexa" de "volte ao endereco global", que e a string vazia.
+	BaseURLOverride *string
 }
 
 // UpdateStreamCredential aplica um patch parcial.
@@ -213,11 +223,12 @@ func (s *Store) UpdateStreamCredential(ctx context.Context, id int64, p StreamCr
 			-- de "o cliente pagou um pacote extra no meio do período".
 			bytes_ciclo     = CASE WHEN $11::boolean THEN 0 ELSE bytes_ciclo END,
 			ciclo_inicio    = CASE WHEN $11::boolean THEN now() ELSE ciclo_inicio END,
+			base_url_override = coalesce($12::text, base_url_override),
 			updated_at      = now()
 		WHERE id = $1
 		RETURNING `+streamCredentialColumns,
 		id, p.Name, p.Description, p.Enabled, maxSet, maxConns, p.AllowedCIDRs,
-		cotaSet, cota, p.Ciclo, p.ZerarCiclo)
+		cotaSet, cota, p.Ciclo, p.ZerarCiclo, p.BaseURLOverride)
 	c, err := scanStreamCredential(row)
 	return c, wrapErr("atualizando credencial", err)
 }
