@@ -2,7 +2,9 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"vodmanager/internal/store"
 )
@@ -170,5 +172,41 @@ func TestResumoDeFalhasExecuta(t *testing.T) {
 	}
 	if causas == nil {
 		t.Fatal("o resumo precisa ser uma lista vazia, e nunca nula: a tela itera sobre ela")
+	}
+}
+
+// TestConsultasDeCamadaExecutam roda as consultas do arquivamento contra o Postgres.
+//
+// Mesma razão das outras: compilar não prova nada sobre SQL. Estas duas mexem em `backend` e
+// `nuvem_id`, que têm restrições no banco — e uma combinação errada só aparece na execução.
+func TestConsultasDeCamadaExecutam(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	if _, err := env.Store.CandidatoParaArquivar(ctx, 24*time.Hour); err != nil &&
+		!errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("CandidatoParaArquivar: %v", err)
+	}
+	for _, backend := range []string{store.BackendLocal, store.BackendNuvem} {
+		if _, err := env.Store.CandidatoParaLimpeza(ctx, 24*time.Hour, backend); err != nil &&
+			!errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("CandidatoParaLimpeza(%s): %v", backend, err)
+		}
+	}
+
+	// Sem candidato, mudar de camada tem de recusar em vez de afetar linha nenhuma em
+	// silêncio — é o que garante que uma falha de arquivamento não perca o apontamento.
+	if err := env.Store.MudarDeCamada(ctx, 999999, 1, "seja-o-que-for", 10); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("MudarDeCamada num id inexistente devia recusar, veio: %v", err)
+	}
+
+	if _, err := env.Store.BytesEmCache(ctx, store.BackendLocal); err != nil {
+		t.Fatalf("BytesEmCache: %v", err)
+	}
+	if _, err := env.Store.TomarParaRemocao(ctx); err != nil && !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("TomarParaRemocao: %v", err)
+	}
+	if _, err := env.Store.DestravarCopiasPendentes(ctx); err != nil {
+		t.Fatalf("DestravarCopiasPendentes: %v", err)
 	}
 }

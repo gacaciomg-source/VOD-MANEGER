@@ -172,6 +172,14 @@ func (b *Baixador) trabalhar(numero int) {
 		// barato — segundos contra horas.
 		trabalhou := b.umaRemocao(ctx)
 		if !trabalhou {
+			// Arquivar antes de copiar, e não depois.
+			//
+			// Só acontece com o disco apertado — e nesse estado uma cópia nova não caberia
+			// de qualquer forma. Mover o frio para a nuvem primeiro é o que devolve espaço
+			// para a cópia seguinte, em vez de deixá-la falhar por falta dele.
+			trabalhou = b.liberarEspaco(ctx)
+		}
+		if !trabalhou {
 			trabalhou = b.umaCopia(ctx, numero)
 		}
 		cancelar()

@@ -3160,9 +3160,12 @@ async function verAcervo() {
 // O estado vem antes das ações de propósito: um download em curso não pode oferecer
 // "apagar" com a mesma naturalidade de um arquivo pronto.
 function linhaDoAcervo(a) {
+  // "quente"/"arquivado" e não só o nome do lugar: agora as cópias MUDAM de camada sozinhas,
+  // e sem essa palavra a tela não explica por que o mesmo filme aparecia no disco ontem e na
+  // nuvem hoje — o que pareceria defeito em vez do funcionamento pretendido.
   const onde = a.backend === 'local'
-    ? 'disco desta máquina'
-    : (a.nuvem_nome ? esc(a.nuvem_nome) : 'nuvem');
+    ? 'disco desta máquina <span class="dica">quente</span>'
+    : `${a.nuvem_nome ? esc(a.nuvem_nome) : 'nuvem'} <span class="dica">arquivado</span>`;
 
   const progresso = a.bytes_totais && a.bytes_totais > 0
     ? Math.round((a.bytes_baixados / a.bytes_totais) * 100)

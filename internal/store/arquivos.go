@@ -620,3 +620,89 @@ func (s *Store) DestravarCopiasPendentes(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// CandidatoParaArquivar escolhe a cópia local mais fria, para mudá-la de camada.
+//
+// Reaproveita a mesma ordenação da limpeza — menos acessado, acessado há mais tempo — porque
+// a pergunta é a mesma: qual destas é a que menos falta faz aqui. O que muda é o destino:
+// arquivar move para a nuvem, limpar apaga.
+//
+// Só `origem = 'fonte'`. Acervo próprio não sai do disco por decisão automática: ele não
+// existe em lugar nenhum além desta instalação, e mandá-lo para uma conta de nuvem sozinho
+// significa que a perda daquela conta é perda definitiva. Isso tem de ser escolha de alguém.
+//
+// Protegido também não: proteger diz "esta cópia é a que resta", e a nuvem é mais frágil que
+// o disco justamente para esse caso.
+func (s *Store) CandidatoParaArquivar(ctx context.Context, idadeMinima time.Duration) (*ArquivoGuardado, error) {
+	a, err := lerArquivo(s.pool.QueryRow(ctx, `
+		SELECT `+colunasArquivo+` FROM arquivos_guardados
+		WHERE estado = 'pronto'
+		  AND origem = 'fonte'
+		  AND backend = 'local'
+		  AND NOT protegido
+		  AND concluido_em < now() - $1::interval
+		ORDER BY ultimo_acesso_em NULLS FIRST, acessos, concluido_em
+		LIMIT 1`, idadeMinima.String()))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("escolhendo cópia para arquivar", err)
+	}
+	return a, nil
+}
+
+// MudarDeCamada aponta a cópia para o novo armazenamento, depois de ela já estar lá.
+//
+// A ordem importa e não é negociável: grava na nuvem, muda o apontamento, e só então apaga
+// do disco. Qualquer outra ordem tem uma janela em que o arquivo não está em lugar nenhum e
+// o banco diz que está pronto — e o espectador recebe um erro no lugar do filme.
+//
+// Duplicado nas duas pontas por um instante é o preço, e é barato.
+func (s *Store) MudarDeCamada(ctx context.Context, id, nuvemID int64, localizador string, bytes int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados
+		SET backend = 'nuvem', nuvem_id = $2, localizador = $3, bytes = $4
+		WHERE id = $1 AND estado = 'pronto'`, id, nuvemID, localizador, bytes)
+	if err != nil {
+		return wrapErr("mudando a cópia de camada", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return wrapErr("mudando a cópia de camada", ErrNotFound)
+	}
+	return nil
+}
+
+// CandidatoParaLimpeza escolhe a cópia mais fria de um armazenamento, para ser apagada.
+//
+// Idêntica em critério à escolha de arquivamento — menos acessado, acessado há mais tempo —
+// e diferente em consequência: aqui o arquivo deixa de existir.
+//
+// As três exclusões são a regra inteira, dita em voz alta:
+//
+//   - `origem = 'fonte'`: acervo próprio NUNCA é apagado por decisão automática. Ele não
+//     existe em lugar nenhum além desta instalação, e apagá-lo é perda definitiva. Quando
+//     faltar espaço e só restar ele, a pergunta aparece no painel.
+//   - `NOT protegido`: proteger diz "a fonte tirou isto do ar, esta cópia é a que resta".
+//   - `concluido_em < now() - carência`: sem isso o cache entra em vaivém — guarda um filme,
+//     apaga dez minutos depois para caber outro, e na hora seguinte faz o inverso.
+//
+// Uma condição a menos aqui é acervo perdido em produção.
+func (s *Store) CandidatoParaLimpeza(ctx context.Context, idadeMinima time.Duration, backend string) (*ArquivoGuardado, error) {
+	a, err := lerArquivo(s.pool.QueryRow(ctx, `
+		SELECT `+colunasArquivo+` FROM arquivos_guardados
+		WHERE estado = 'pronto'
+		  AND origem = 'fonte'
+		  AND backend = $2
+		  AND NOT protegido
+		  AND concluido_em < now() - $1::interval
+		ORDER BY ultimo_acesso_em NULLS FIRST, acessos, concluido_em
+		LIMIT 1`, idadeMinima.String(), backend))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("escolhendo cópia para limpeza", err)
+	}
+	return a, nil
+}
