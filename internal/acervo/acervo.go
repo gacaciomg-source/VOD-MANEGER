@@ -263,7 +263,7 @@ func (s *Servico) TalvezGuardar(ctx context.Context, v *store.PlayableVariant, a
 	// que não cabe encheria a fila de pedidos condenados a falhar, e o painel mostraria uma
 	// lista de erros onde a verdade é simplesmente "o disco encheu".
 	if destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID); err == nil {
-		if !s.HaOndeGuardar(ctx, pol, destino) {
+		if !s.HaOndeGuardar(ctx, pol, pol.Destino, destino) {
 			return
 		}
 	}
@@ -311,9 +311,12 @@ const espacoMinimoPadrao = 10
 //
 // Na dúvida devolve `true`. Um armazenamento que não sabe informar o próprio tamanho (é o
 // caso das nuvens sem limite anunciado) não é motivo para desligar o cache.
-func (s *Servico) HaOndeGuardar(ctx context.Context, pol Politica, destino armazenamento.Backend) bool {
+// `backend` diz QUAL armazenamento esta sendo medido, e nao pode ser deduzido do destino
+// configurado: a limpeza pergunta pelo disco local mesmo quando o destino padrao e a nuvem, e
+// medir o teto na nuvem nesse caso responderia sobre o armazenamento errado.
+func (s *Servico) HaOndeGuardar(ctx context.Context, pol Politica, backend string, destino armazenamento.Backend) bool {
 	if pol.LimiteBytes > 0 {
-		usado, err := s.store.BytesEmCache(ctx, pol.Destino)
+		usado, err := s.store.BytesEmCache(ctx, backend)
 		if err != nil {
 			s.log.Warn("falha ao medir o cache; seguindo sem o limite", "erro", err)
 		} else if usado >= pol.LimiteBytes {

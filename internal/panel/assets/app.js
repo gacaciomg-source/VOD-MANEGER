@@ -3824,15 +3824,33 @@ async function verConfiguracoes() {
         <label>Folga mínima do armazenamento (%)
           <input id="cfg-cache-folga" type="number" min="0" max="90" value="${esc(c.cache_espaco_minimo_pct || '10')}">
         </label>
+        <label>Teto do cache (GB)
+          <input id="cfg-cache-teto" type="number" min="0" step="1"
+                 value="${Math.round((Number(c.cache_limite_bytes) || 0) / (1024 ** 3))}">
+        </label>
       </div>
-      <p class="dica">
-        A carência evita o vaivém: guardar um filme, apagá-lo dez minutos depois para caber
-        outro, e na hora seguinte fazer o inverso — gasta banda dos dois lados e não melhora
-        nada.
+
+      <div class="veredito info" style="margin:4px 0 12px">
+        <b>Quando a limpeza começa.</b> Os dois campos acima são gatilhos, e vale o que
+        disparar primeiro:
         <br>
-        Ao atingir a <b>folga mínima</b>, o sistema para de guardar e volta a buscar da
-        fonte — o que já cabe no disco continua sendo servido de lá. Ele não apaga um filme
+        • <b>Folga mínima</b> — quando sobrar menos que essa fatia do armazenamento.
+        Serve para o disco da máquina, que também precisa de espaço para o banco de dados.
+        <br>
+        • <b>Teto do cache</b> — quando as cópias somarem esse tamanho, mesmo com disco
+        sobrando. Serve para não deixar o acervo crescer sem limite. <b>0 desliga</b> este
+        gatilho, valendo só a folga.
+      </div>
+
+      <p class="dica">
+        Disparado o gatilho, a ordem é sempre a mesma, da menor perda para a maior:
+        <b>mover o mais frio para a nuvem</b> (nada se perde), depois <b>apagar o mais
+        frio</b> — menos acessado e acessado há mais tempo. Ele nunca apaga um filme
         procurado para caber um que ninguém pediu ainda.
+        <br>
+        A <b>carência</b> protege o que é recente. Sem ela o cache entra em vaivém: guarda um
+        filme, apaga dez minutos depois para caber outro, e na hora seguinte faz o inverso —
+        gasta banda dos dois lados e não melhora nada.
         <br>
         <b>A limpeza automática só apaga cache.</b> O que você enviar pelo painel nunca é
         apagado sozinho, nem com o disco cheio; a decisão aparece na tela do Acervo.
@@ -3920,6 +3938,8 @@ async function verConfiguracoes() {
           cache_backend: $('#cfg-cache-destino').value,
           cache_idade_minima_horas: Number($('#cfg-cache-carencia').value) || 0,
           cache_espaco_minimo_pct: Number($("#cfg-cache-folga").value) || 0,
+          // Em GB na tela, em bytes no banco: ninguem digita 53687091200 sem errar um zero.
+          cache_limite_bytes: Math.round((Number($("#cfg-cache-teto").value) || 0) * (1024 ** 3)),
         },
       });
       aviso($('#cfg-cache').checked

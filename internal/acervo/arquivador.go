@@ -122,7 +122,7 @@ func (b *Baixador) liberarEspaco(ctx context.Context) bool {
 	}
 
 	disco, temDisco := s.registro.Obter(armazenamento.ChaveLocal)
-	if temDisco && !s.HaOndeGuardar(ctx, pol, disco) {
+	if temDisco && !s.HaOndeGuardar(ctx, pol, store.BackendLocal, disco) {
 		// Degrau 1: mover para a nuvem, se houver conta que receba.
 		if b.arquivarUm(ctx, pol, disco) {
 			return true

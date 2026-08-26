@@ -108,7 +108,7 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 	}
 
 	destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID)
-	if err != nil || !s.HaOndeGuardar(ctx, pol, destino) {
+	if err != nil || !s.HaOndeGuardar(ctx, pol, pol.Destino, destino) {
 		return nil
 	}
 
@@ -356,7 +356,7 @@ func (s *Servico) TalvezAdiantarProximo(ctx context.Context, alvo *store.StreamT
 	}
 
 	destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID)
-	if err != nil || !s.HaOndeGuardar(ctx, pol, destino) {
+	if err != nil || !s.HaOndeGuardar(ctx, pol, pol.Destino, destino) {
 		return
 	}
 
