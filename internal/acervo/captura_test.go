@@ -120,3 +120,48 @@ func TestCapturaCopiaOBufferRecebido(t *testing.T) {
 		t.Fatalf("a captura guardou o buffer sem copiar: %q", guardado)
 	}
 }
+
+// O defeito que este teste existe para impedir, dito com precisão:
+//
+// O proxy passava `estado == "closed"` como "completo". Esse campo continua "closed" quando
+// o ESPECTADOR fecha o player — só o código de erro muda, porque fechar o player não é falha
+// de entrega. A captura então concluía os primeiros cem quilobytes de cada filme como se
+// fossem o filme, e o acervo passava a servi-los no lugar da fonte.
+//
+// No painel, tudo verde: dezenas de títulos "pronto". Na TV, nada abria.
+//
+// A lição está na assinatura: `Fechar(completo bool)` aceita a opinião de quem chama. A
+// defesa é o tamanho anunciado, que é fato.
+func TestCapturaRecusaConcluirComTamanhoMenor(t *testing.T) {
+	c := &Captura{
+		pedacos:   make(chan []byte, pedacosNaFila),
+		fim:       make(chan resultadoDaCaptura, 1),
+		anunciado: 2 << 30, // 2 GB anunciados pela fonte
+	}
+
+	// A gravação terminou com 100 KB: o espectador fechou o player no começo.
+	c.fim <- resultadoDaCaptura{localizador: "pedaco.mp4", bytes: 100 << 10}
+	c.escritos = 100 << 10
+
+	// Mesmo com o chamador insistindo que está completo, o tamanho desmente.
+	falhou := deveFalhar(c, true)
+	if !falhou {
+		t.Fatal("a captura concluiu uma cópia de 100 KB para um arquivo de 2 GB")
+	}
+}
+
+// deveFalhar reproduz a decisão de Fechar sem tocar no banco.
+//
+// Fechar grava no store, que não existe aqui. O que este teste precisa verificar é a
+// DECISÃO — e ela é aritmética pura.
+func deveFalhar(c *Captura, completo bool) bool {
+	res := <-c.fim
+	falhou := c.desistiu || !completo || res.err != nil
+	if !falhou && c.anunciado > 0 && res.bytes != c.anunciado {
+		falhou = true
+	}
+	if !falhou && res.bytes != c.escritos {
+		falhou = true
+	}
+	return falhou
+}

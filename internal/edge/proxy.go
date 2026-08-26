@@ -379,9 +379,17 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	}
 
 	if captura != nil {
-		// A captura já gravou o filme durante a entrega. `estado == "closed"` é o que
-		// distingue a cópia inteira da que parou no meio — e só a inteira vira acervo.
-		captura.Fechar(estado == "closed")
+		// Completo se, e somente se, os bytes fecham com o que a fonte anunciou.
+		//
+		// Contar com `estado == "closed"` foi um erro caro: esse campo continua "closed"
+		// quando o CLIENTE desconecta — só o código de erro muda, porque fechar o player
+		// não é falha de entrega. O resultado foi o cache guardar como pronto os primeiros
+		// cem quilobytes de cada filme, e passar a servi-los no lugar da fonte. O painel
+		// mostrava tudo verde, e nada abria.
+		//
+		// Bytes não têm essa ambiguidade.
+		completo := codigoErro == "" && resp.ContentLength > 0 && enviados == resp.ContentLength
+		captura.Fechar(completo)
 	} else if p.acervo != nil && estado == "closed" && enviados > 0 {
 		p.acervo.TalvezGuardar(context.WithoutCancel(r.Context()), usada, ped.alvo)
 	}

@@ -56,6 +56,12 @@ type Captura struct {
 	fim      chan resultadoDaCaptura
 	desistiu bool
 	escritos int64
+	// anunciado e o tamanho que a fonte disse que o arquivo tem.
+	//
+	// Guardado aqui para que a decisao de concluir NAO dependa de quem chama. Ela ja
+	// dependeu, e o resultado foi o cache guardar os primeiros cem quilobytes de cada
+	// filme como se fossem o filme inteiro.
+	anunciado int64
 }
 
 type resultadoDaCaptura struct {
@@ -132,10 +138,11 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 	}
 
 	c := &Captura{
-		servico: s,
-		arquivo: arquivo,
-		pedacos: make(chan []byte, pedacosNaFila),
-		fim:     make(chan resultadoDaCaptura, 1),
+		servico:   s,
+		arquivo:   arquivo,
+		anunciado: tamanho,
+		pedacos:   make(chan []byte, pedacosNaFila),
+		fim:       make(chan resultadoDaCaptura, 1),
 	}
 
 	// O contexto é o de fundo, e não o da requisição: a gravação precisa poder terminar de
@@ -212,6 +219,21 @@ func (c *Captura) Fechar(completo bool) {
 	s := c.servico
 
 	falhou := jaDesistiu || !completo || res.err != nil
+
+	// A conferência que não depende do chamador.
+	//
+	// `completo` é opinião de quem chama, e essa opinião já esteve errada: o proxy passava
+	// `estado == "closed"`, que continua verdadeiro quando o espectador fecha o player. O
+	// cache guardou os primeiros cem quilobytes de dezenas de filmes como se fossem os
+	// filmes, e passou a servi-los no lugar da fonte — tudo verde no painel, nada abrindo.
+	//
+	// O tamanho anunciado é fato, não opinião. Confiar nele aqui torna impossível repetir
+	// aquele defeito por outro caminho.
+	if !falhou && c.anunciado > 0 && res.bytes != c.anunciado {
+		s.log.Warn("captura descartada: o tamanho não fecha com o anunciado",
+			"arquivo_id", c.arquivo.ID, "gravado", res.bytes, "anunciado", c.anunciado)
+		falhou = true
+	}
 	if !falhou && res.bytes != c.escritos {
 		// A gravação recebeu menos do que passou pelo cliente. Não deveria acontecer, e
 		// justamente por isso não pode ser ignorado.

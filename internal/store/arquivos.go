@@ -130,9 +130,22 @@ func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
 // Ausência não é erro. É a resposta "não temos, vá à fonte", que é o caminho normal
 // enquanto o cache estiver desligado.
 func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID int64) (*ArquivoGuardado, error) {
+	// A conferência de tamanho faz parte da consulta, e não do chamador.
+	//
+	// Uma cópia cujo tamanho não fecha com o que a fonte anunciou é um pedaço de filme, e
+	// servi-la é pior que não ter cache nenhum: ela toma o lugar da fonte, que está inteira,
+	// e o espectador recebe cem quilobytes de um filme de dois gigabytes.
+	//
+	// Aqui, e não em quem chama, porque este é o único caminho por onde uma cópia chega à
+	// reprodução. Uma linha ruim que já esteja no banco — de uma versão anterior, de um
+	// defeito futuro — para de ser servida sem que ninguém precise limpá-la à mão.
+	//
+	// `bytes_totais = 0` é o caso legítimo de uma fonte que não anuncia tamanho: não há com
+	// o que comparar, e recusar por isso desligaria o cache dessas fontes.
 	a, err := lerArquivo(s.pool.QueryRow(ctx,
 		`SELECT `+colunasArquivo+` FROM arquivos_guardados
-		 WHERE variant_id = $1 AND estado = 'pronto'`, variantID))
+		 WHERE variant_id = $1 AND estado = 'pronto'
+		   AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`, variantID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
