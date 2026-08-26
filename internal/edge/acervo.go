@@ -174,13 +174,6 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	p.contabilidade.Registrar(ped.credID, enviados)
 	p.acervo.RegistrarAcesso(r.Context(), arquivo.ID)
 
-	// Adiantar tambem daqui: quem assiste o episodio 50 do disco vai abrir o 51 do mesmo
-	// jeito, e faltando so neste caminho a serie inteira sairia do cache um episodio
-	// atrasada — que e exatamente o defeito que o adiantamento existe para remover.
-	if estado == "closed" {
-		p.acervo.TalvezAdiantarProximo(context.WithoutCancel(r.Context()), ped.alvo)
-	}
-
 	p.log.Info("stream servido do acervo",
 		"content_id", ped.alvo.ContentID, "arquivo_id", arquivo.ID,
 		"onde", arquivo.Backend, "bytes", enviados, "ttfb_ms", ttfb)
@@ -215,4 +208,33 @@ type CapturaDoAcervo interface {
 	// Fechar decide o destino da cópia. `completo` diz se a fonte entregou tudo o que
 	// anunciou — só nesse caso a cópia vira acervo.
 	Fechar(completo bool)
+}
+
+// adiantarProximoEpisodio enfileira o episódio seguinte, sem atrasar este.
+//
+// # Numa rotina própria, sempre
+//
+// Ele consulta o catálogo e escreve na fila — trabalho de banco que não interessa a quem
+// está esperando o vídeo começar. Feito na linha da requisição, cada reprodução de série
+// pagaria essas consultas antes do primeiro byte.
+//
+// # Só no início da reprodução
+//
+// A condição é o pedido começar no byte zero. Um player dá dezenas de pedidos com `Range`
+// ao longo de um episódio — cada seek é um —, e adiantar em todos repetiria as mesmas
+// consultas dezenas de vezes para chegar sempre à mesma conclusão. No byte zero acontece
+// uma vez por reprodução, que é exatamente a frequência certa.
+//
+// O contexto é o de fundo: o adiantamento não pode ser cancelado porque o espectador fechou
+// o player. Se ele fechou no episódio 20, o 21 continua valendo a pena.
+func (p *Proxy) adiantarProximoEpisodio(r *http.Request, ped pedido) {
+	if p.acervo == nil || ped.alvo == nil || ped.alvo.EpisodeID == nil {
+		return
+	}
+	if inicioPedido(r.Header.Get("Range")) != 0 {
+		return
+	}
+	ctx := context.WithoutCancel(r.Context())
+	alvo := ped.alvo
+	go p.acervo.TalvezAdiantarProximo(ctx, alvo)
 }

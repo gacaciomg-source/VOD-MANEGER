@@ -238,7 +238,16 @@ func (s *Store) TomarDaFila(ctx context.Context) (*ArquivoGuardado, error) {
 		WHERE id = (
 			SELECT id FROM arquivos_guardados
 			WHERE estado = 'pendente'
-			ORDER BY criado_em
+			-- Adiantados primeiro, e por um motivo de prazo, nao de importancia.
+			--
+			-- Um adiantamento tem hora marcada: o espectador chega no proximo episodio em
+			-- cerca de quarenta minutos, e depois disso a copia perdeu a graca — ele ja
+			-- esperou. Os demais itens da fila nao tem prazo nenhum; sao filmes ja
+			-- assistidos, e guarda-los uma hora depois vale o mesmo que agora.
+			--
+			-- Nao ha risco de deixar os outros de lado: adiantamentos sao poucos, um por
+			-- episodio iniciado, e somem da fila assim que baixam.
+			ORDER BY adiantado DESC, criado_em
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)

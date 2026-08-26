@@ -128,6 +128,16 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		return
 	}
 
+	// O próximo episódio é enfileirado no COMEÇO deste, e não no fim.
+	//
+	// No fim não servia para nada, e a razão é simples: quem termina o episódio 20 abre o 21
+	// em segundos. Um download que começa nesse instante chega tarde por definição — o
+	// espectador espera exatamente o que o adiantamento existia para evitar.
+	//
+	// Começando agora, o 21 tem a duração inteira do 20 para descer. É a diferença entre
+	// quarenta minutos de vantagem e nenhuma.
+	p.adiantarProximoEpisodio(r, ped)
+
 	// O acervo vem antes da fonte.
 	//
 	// A consulta é um índice parcial e uma linha — barata o bastante para caber no caminho
@@ -371,13 +381,6 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	//
 	// O contexto é o de fundo, não o da requisição: este já foi cancelado quando o cliente
 	// fechou o player, e usá-lo faria a fila nunca receber nada de quem assiste até o fim.
-	// Em série, o proximo episodio e a proxima reproducao quase certa. Enfileira-lo aqui
-	// e o que faz a troca de episodio nao esperar por um download que poderia ter comecado
-	// enquanto o anterior ainda tocava.
-	if p.acervo != nil && estado == "closed" {
-		p.acervo.TalvezAdiantarProximo(context.WithoutCancel(r.Context()), ped.alvo)
-	}
-
 	if captura != nil {
 		// Completo se, e somente se, os bytes fecham com o que a fonte anunciou.
 		//
