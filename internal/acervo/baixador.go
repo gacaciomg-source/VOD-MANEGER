@@ -121,6 +121,15 @@ func (b *Baixador) Start(ctx context.Context) error {
 		b.log.Warn("cópias interrompidas devolvidas à fila", "quantidade", n)
 	}
 
+	// Copias truncadas de uma versao anterior: inertes na reproducao, mas ocupando a
+	// variante — o que impediria o titulo de ser copiado de novo, para sempre.
+	if n, err := b.store.MarcarCopiasTruncadas(ctx); err != nil {
+		b.log.Warn("falha ao marcar cópias truncadas", "erro", err)
+	} else if n > 0 {
+		b.log.Warn("cópias truncadas enviadas para remoção; os títulos voltam à fila",
+			"quantidade", n)
+	}
+
 	for i := 0; i < trabalhadores; i++ {
 		b.fim.Add(1)
 		go b.trabalhar(i + 1)

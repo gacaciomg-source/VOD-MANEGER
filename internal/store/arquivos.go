@@ -719,3 +719,31 @@ func (s *Store) CandidatoParaLimpeza(ctx context.Context, idadeMinima time.Durat
 	}
 	return a, nil
 }
+
+// MarcarCopiasTruncadas põe na fila de remoção as cópias cujo tamanho não fecha.
+//
+// # Por que não basta parar de servi-las
+//
+// A consulta de reprodução já as ignora, então elas não fazem mais mal. Mas elas continuam
+// OCUPANDO a variante: enfileirar uma cópia devolve o registro existente, e um registro
+// "pronto" faz o sistema concluir que aquele título já está guardado.
+//
+// O efeito seria silencioso e permanente — justamente os títulos afetados nunca mais seriam
+// copiados, e ninguém saberia por quê. Ficariam para sempre saindo da fonte, num sistema que
+// se diz com cache.
+//
+// Removê-las devolve a variante à fila: na próxima reprodução, o título é copiado inteiro.
+//
+// Roda na partida, e é idempotente: sem cópias truncadas ela não faz nada.
+func (s *Store) MarcarCopiasTruncadas(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados SET estado = 'removendo'
+		WHERE estado = 'pronto'
+		  AND origem = 'fonte'
+		  AND bytes_totais IS NOT NULL AND bytes_totais > 0
+		  AND bytes <> bytes_totais`)
+	if err != nil {
+		return 0, wrapErr("marcando cópias truncadas", err)
+	}
+	return tag.RowsAffected(), nil
+}
