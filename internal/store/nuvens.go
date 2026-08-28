@@ -35,9 +35,11 @@ type Nuvem struct {
 	BytesUsados    *int64     `json:"bytes_usados"`
 	BytesTotais    *int64     `json:"bytes_totais"`
 	MedidaEm       *time.Time `json:"medida_em"`
-	UltimoErro     string     `json:"ultimo_erro"`
-	UltimoErroEm   *time.Time `json:"ultimo_erro_em"`
-	CriadoEm       time.Time  `json:"criado_em"`
+	// Esvaziando: o acervo desta conta esta sendo movido para outra, um arquivo por vez.
+	Esvaziando   bool       `json:"esvaziando"`
+	UltimoErro   string     `json:"ultimo_erro"`
+	UltimoErroEm *time.Time `json:"ultimo_erro_em"`
+	CriadoEm     time.Time  `json:"criado_em"`
 	// Arquivos e BytesGuardados vêm do acervo, não da conta. Respondem à pergunta de quem
 	// está prestes a remover uma conta: o que exatamente eu perco?
 	Arquivos       int64 `json:"arquivos"`
@@ -56,7 +58,7 @@ func (n *Nuvem) PodeReceber() bool { return n.Ativa && !n.SomenteLeitura }
 var camposNuvem = []string{
 	"id", "nome", "provedor", "pasta_raiz", "ativa", "somente_leitura",
 	"ordem", "bytes_usados", "bytes_totais", "medida_em", "ultimo_erro", "ultimo_erro_em",
-	"criado_em",
+	"criado_em", "esvaziando",
 }
 
 // colunasNuvem serve ao RETURNING de INSERT e UPDATE, que NÃO têm apelido de tabela.
@@ -81,7 +83,7 @@ func lerNuvem(linha pgx.Row, comAcervo bool) (*Nuvem, error) {
 	var n Nuvem
 	alvos := []any{&n.ID, &n.Nome, &n.Provedor, &n.PastaRaiz, &n.Ativa, &n.SomenteLeitura,
 		&n.Ordem, &n.BytesUsados, &n.BytesTotais, &n.MedidaEm, &n.UltimoErro,
-		&n.UltimoErroEm, &n.CriadoEm}
+		&n.UltimoErroEm, &n.CriadoEm, &n.Esvaziando}
 	if comAcervo {
 		alvos = append(alvos, &n.Arquivos, &n.BytesGuardados)
 	}
@@ -318,4 +320,59 @@ func (s *Store) ArquivosDaNuvem(ctx context.Context, id int64, limite int) ([]Ar
 		out = append(out, *a)
 	}
 	return out, wrapErr("listando arquivos da conta de nuvem", rows.Err())
+}
+
+// EsvaziarNuvem marca uma conta para ter o acervo movido para outra.
+//
+// Liga `somente_leitura` junto, e não por conveniência: encher de um lado enquanto se esvazia
+// do outro é trabalho que nunca termina. O banco recusa a combinação contrária.
+func (s *Store) EsvaziarNuvem(ctx context.Context, id int64, esvaziar bool) (*Nuvem, error) {
+	n, err := lerNuvem(s.pool.QueryRow(ctx, `
+		UPDATE nuvens
+		SET esvaziando = $2,
+		    somente_leitura = CASE WHEN $2 THEN true ELSE somente_leitura END
+		WHERE id = $1
+		RETURNING `+colunasNuvem, id, esvaziar), false)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("marcando conta para esvaziar", err)
+	}
+	return n, nil
+}
+
+// NuvemEsvaziando devolve uma conta marcada para esvaziar, se houver.
+func (s *Store) NuvemEsvaziando(ctx context.Context) (*Nuvem, error) {
+	n, err := lerNuvem(s.pool.QueryRow(ctx,
+		`SELECT `+colunasNuvemDe("n")+` FROM nuvens n
+		 WHERE n.esvaziando AND n.ativa ORDER BY n.id LIMIT 1`), false)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("procurando conta em esvaziamento", err)
+	}
+	return n, nil
+}
+
+// ArquivoParaMudarDeConta escolhe um arquivo da conta, para ser movido.
+//
+// Sem filtro de origem nem de proteção: esvaziar é decisão explícita de quem administra, e
+// mover não perde nada — o arquivo continua no acervo, em outra conta. É o oposto da limpeza,
+// que apaga e por isso precisa de todas as ressalvas.
+//
+// Só o que está `pronto`: mover uma cópia em curso significaria abortá-la.
+func (s *Store) ArquivoParaMudarDeConta(ctx context.Context, nuvemID int64) (*ArquivoGuardado, error) {
+	a, err := lerArquivo(s.pool.QueryRow(ctx,
+		`SELECT `+colunasArquivo+` FROM arquivos_guardados
+		 WHERE nuvem_id = $1 AND estado = 'pronto' AND backend = 'nuvem'
+		 ORDER BY id LIMIT 1`, nuvemID))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, wrapErr("escolhendo arquivo para mudar de conta", err)
+	}
+	return a, nil
 }

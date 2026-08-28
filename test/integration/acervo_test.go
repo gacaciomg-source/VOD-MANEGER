@@ -263,6 +263,29 @@ func TestCicloDaContaDeNuvemExecuta(t *testing.T) {
 		store.AjusteDeNuvem{SomenteLeitura: &somenteLeitura}); err != nil {
 		t.Fatalf("AtualizarNuvem: %v", err)
 	}
+
+	// O ciclo do esvaziamento: marcar, achar a conta marcada, procurar arquivo, desmarcar.
+	// A restricao do banco recusa esvaziar sem somente_leitura, entao a ordem importa.
+	if _, err := env.Store.EsvaziarNuvem(ctx, nuvem.ID, true); err != nil {
+		t.Fatalf("EsvaziarNuvem: %v", err)
+	}
+	marcada, err := env.Store.NuvemEsvaziando(ctx)
+	if err != nil {
+		t.Fatalf("NuvemEsvaziando: %v", err)
+	}
+	if marcada.ID != nuvem.ID || !marcada.Esvaziando || !marcada.SomenteLeitura {
+		t.Fatalf("esvaziar precisa ligar somente_leitura junto: %+v", marcada)
+	}
+	if _, err := env.Store.ArquivoParaMudarDeConta(ctx, nuvem.ID); err != nil &&
+		!errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ArquivoParaMudarDeConta: %v", err)
+	}
+	if err := env.Store.TrazerParaODisco(ctx, 999999, "x", 1); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("TrazerParaODisco num id inexistente devia recusar, veio: %v", err)
+	}
+	if _, err := env.Store.EsvaziarNuvem(ctx, nuvem.ID, false); err != nil {
+		t.Fatalf("EsvaziarNuvem(false): %v", err)
+	}
 	if err := env.Store.RemoverNuvem(ctx, nuvem.ID); err != nil {
 		t.Fatalf("RemoverNuvem: %v", err)
 	}

@@ -192,6 +192,13 @@ func (b *Baixador) trabalhar(numero int) {
 		// barato — segundos contra horas.
 		trabalhou := b.umaRemocao(ctx)
 		if !trabalhou {
+			// Esvaziar uma conta vem antes de arquivar e de copiar: e uma ordem explicita
+			// de quem administra, com um fim a alcancar, enquanto as outras sao rotina sem
+			// prazo. Deixa-la para depois faria uma migracao de centenas de gigabytes durar
+			// semanas por nunca chegar a vez dela.
+			trabalhou = b.esvaziarConta(ctx)
+		}
+		if !trabalhou {
 			// Arquivar antes de copiar, e não depois.
 			//
 			// Só acontece com o disco apertado — e nesse estado uma cópia nova não caberia

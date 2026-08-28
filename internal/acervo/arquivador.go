@@ -296,3 +296,125 @@ func (b *Baixador) medirNuvens(ctx context.Context) {
 			"conta", n.Nome, "usado", esp.Usado, "total", totais, "ilimitado", esp.Ilimitado)
 	}
 }
+
+// esvaziarConta move um arquivo de uma conta marcada para outra. Devolve false quando não
+// havia nada a mover.
+//
+// # Um por vez, e não em lote
+//
+// Mover o acervo de uma conta é baixar e subir cada arquivo de novo — dezenas ou centenas de
+// gigabytes. Feito em lote, uma interrupção deixaria metade migrada sem registro de onde
+// parou. Um por vez, cada arquivo é uma transação completa: ou está lá, ou está cá, nunca em
+// lugar nenhum. Reiniciar o serviço retoma naturalmente.
+//
+// # Para onde vai
+//
+// Para a próxima conta que possa receber. Sem nenhuma, cai para o disco local — que é melhor
+// que ficar preso numa conta que a pessoa quer desativar. Sem disco e sem outra conta, não há
+// para onde ir e o arquivo fica: perder o acervo para "esvaziar" seria o pior desfecho.
+func (b *Baixador) esvaziarConta(ctx context.Context) bool {
+	s := b.servico
+	conta, err := s.store.NuvemEsvaziando(ctx)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			b.log.Warn("falha ao procurar conta em esvaziamento", "erro", err)
+		}
+		return false
+	}
+
+	arquivo, err := s.store.ArquivoParaMudarDeConta(ctx, conta.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Acabou: a conta está vazia. Desmarcar aqui é o que faz o painel parar de
+			// dizer "esvaziando" para sempre — e o que avisa que já dá para removê-la.
+			if _, e := s.store.EsvaziarNuvem(ctx, conta.ID, false); e != nil {
+				b.log.Warn("falha ao concluir o esvaziamento", "conta", conta.Nome, "erro", e)
+				return false
+			}
+			b.log.Info("conta de nuvem esvaziada; já pode ser removida", "conta", conta.Nome)
+			return true
+		}
+		b.log.Warn("falha ao escolher arquivo para mover", "conta", conta.Nome, "erro", err)
+		return false
+	}
+
+	if err := b.mudarDeConta(ctx, arquivo, conta); err != nil {
+		b.log.Warn("falha ao mover arquivo entre contas; ele continua onde estava",
+			"arquivo_id", arquivo.ID, "conta", conta.Nome, "erro", err)
+		// `false` de propósito: sem sucesso, o trabalhador espera o intervalo antes de
+		// tentar de novo. Insistir em laço apertado numa conta com problema só multiplicaria
+		// as chamadas ao provedor.
+		return false
+	}
+	return true
+}
+
+func (b *Baixador) mudarDeConta(ctx context.Context, arquivo *store.ArquivoGuardado,
+	origemConta *store.Nuvem) error {
+
+	s := b.servico
+	origem, err := s.BackendDaNuvem(ctx, origemConta.ID)
+	if err != nil {
+		return err
+	}
+
+	destinoConta, err := s.store.NuvemParaGravar(ctx, arquivo.Bytes)
+	if err == nil && destinoConta.ID != origemConta.ID {
+		destino, err := s.BackendDaNuvem(ctx, destinoConta.ID)
+		if err != nil {
+			return err
+		}
+		return b.transferir(ctx, arquivo, origem, destino, &destinoConta.ID, destinoConta.Nome)
+	}
+
+	// Sem outra conta: o disco local. Melhor que ficar preso numa conta que se quer desativar.
+	disco, ok := s.registro.Obter(armazenamento.ChaveLocal)
+	if !ok {
+		return fmt.Errorf("não há outra conta nem disco local para receber o acervo de %q",
+			origemConta.Nome)
+	}
+	return b.transferir(ctx, arquivo, origem, disco, nil, "disco desta máquina")
+}
+
+// transferir move um arquivo entre dois armazenamentos.
+//
+// A ordem é a mesma do arquivamento, e pela mesma razão: grava no destino, muda o
+// apontamento, só então apaga a origem. Qualquer outra cria um instante em que o banco diz
+// "pronto" e o arquivo não está em lugar nenhum.
+func (b *Baixador) transferir(ctx context.Context, arquivo *store.ArquivoGuardado,
+	origem, destino armazenamento.Backend, nuvemID *int64, ondeNome string) error {
+
+	leitura, err := origem.Abrir(ctx, arquivo.Localizador, 0)
+	if err != nil {
+		return fmt.Errorf("abrindo a cópia na origem: %w", err)
+	}
+	defer leitura.Close()
+
+	novo, err := destino.Guardar(ctx, arquivo.Localizador, leitura, arquivo.Bytes)
+	if err != nil {
+		return fmt.Errorf("gravando no destino: %w", err)
+	}
+	if novo.Bytes != arquivo.Bytes {
+		_ = destino.Apagar(context.Background(), novo.Localizador)
+		return fmt.Errorf("o destino recebeu %d de %d bytes; a cópia foi descartada",
+			novo.Bytes, arquivo.Bytes)
+	}
+
+	if nuvemID != nil {
+		err = b.servico.store.MudarDeCamada(ctx, arquivo.ID, *nuvemID, novo.Localizador, novo.Bytes)
+	} else {
+		err = b.servico.store.TrazerParaODisco(ctx, arquivo.ID, novo.Localizador, novo.Bytes)
+	}
+	if err != nil {
+		_ = destino.Apagar(context.Background(), novo.Localizador)
+		return fmt.Errorf("apontando para o destino: %w", err)
+	}
+
+	if err := origem.Apagar(context.Background(), arquivo.Localizador); err != nil {
+		b.log.Warn("arquivo movido, mas a cópia antiga permaneceu",
+			"arquivo_id", arquivo.ID, "erro", err)
+	}
+	b.log.Info("arquivo movido entre armazenamentos",
+		"arquivo_id", arquivo.ID, "destino", ondeNome, "bytes", novo.Bytes)
+	return nil
+}

@@ -271,3 +271,51 @@ func (s *Server) handleOrganizarNuvem(w http.ResponseWriter, r *http.Request) {
 		"pasta do acervo definida na conta "+nuvem.Nome, actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"nuvem": nuvem, "pasta": pasta})
 }
+
+type esvaziarNuvemRequest struct {
+	// Esvaziar false CANCELA um esvaziamento em curso. O que já se moveu fica onde está —
+	// não há por que desfazer trabalho concluído.
+	Esvaziar bool `json:"esvaziar"`
+}
+
+// handleEsvaziarNuvem marca uma conta para ter o acervo movido para outra.
+//
+// # Por que a resposta é imediata e o trabalho não
+//
+// Mover o acervo de uma conta é baixar e subir cada arquivo — dezenas ou centenas de
+// gigabytes, horas ou dias. Fazer isso dentro da requisição a faria expirar muito antes, e
+// uma migração interrompida no meio deixaria metade do acervo apontando para cada lado.
+//
+// Então isto grava um ESTADO, e quem move é o baixador, um arquivo por vez. Cada arquivo é
+// uma transação completa: ou está lá, ou está cá, nunca em lugar nenhum. Reiniciar o serviço
+// retoma de onde parou.
+//
+// # Para onde vai
+//
+// Para a próxima conta que possa receber, na ordem de preenchimento. Sem nenhuma, para o
+// disco local — que é melhor que ficar preso numa conta que se quer desativar.
+func (s *Server) handleEsvaziarNuvem(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	var req esvaziarNuvemRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body", "corpo inválido: "+err.Error())
+		return
+	}
+
+	nuvem, err := s.deps.Store.EsvaziarNuvem(r.Context(), id, req.Esvaziar)
+	if err != nil {
+		s.fail(w, r, err, "marcando conta para esvaziar")
+		return
+	}
+
+	acao := "esvaziamento cancelado na conta "
+	if req.Esvaziar {
+		acao = "esvaziamento iniciado na conta "
+	}
+	s.logEvent(r, "acervo", "info", acao+nuvem.Nome, actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"nuvem": nuvem})
+}

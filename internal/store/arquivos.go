@@ -799,3 +799,22 @@ func (s *Store) ExplicarLimpeza(ctx context.Context, idadeMinima time.Duration) 
 	}
 	return &d, nil
 }
+
+// TrazerParaODisco aponta a cópia para o disco local, depois de ela já estar lá.
+//
+// O par de MudarDeCamada, para o sentido inverso. Zera `nuvem_id` porque o banco recusa uma
+// linha local que ainda aponte para uma conta — e essa recusa é o que impede um registro
+// contraditório de existir.
+func (s *Store) TrazerParaODisco(ctx context.Context, id int64, localizador string, bytes int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados
+		SET backend = 'local', nuvem_id = NULL, localizador = $2, bytes = $3
+		WHERE id = $1 AND estado = 'pronto'`, id, localizador, bytes)
+	if err != nil {
+		return wrapErr("trazendo a cópia para o disco", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return wrapErr("trazendo a cópia para o disco", ErrNotFound)
+	}
+	return nil
+}

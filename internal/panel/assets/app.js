@@ -3265,6 +3265,11 @@ function desenharNuvens(resumo) {
                         data-valor="${n.somente_leitura ? 'false' : 'true'}"
                         title="Para de receber cópias novas, sem parar de servir o que já está lá">
                   ${n.somente_leitura ? 'Voltar a receber' : 'Parar de receber'}</button>
+                <button class="btn btn-mini" data-nuvem-esvaziar="${n.id}"
+                        data-valor="${n.esvaziando ? 'false' : 'true'}"
+                        data-nome="${esc(n.nome)}" data-arquivos="${n.arquivos}"
+                        title="Move o acervo desta conta para outra, um arquivo por vez, em segundo plano">
+                  ${n.esvaziando ? 'Parar de esvaziar' : 'Migrar para outra conta'}</button>
                 <button class="btn btn-mini" data-nuvem-ativa="${n.id}" data-valor="${n.ativa ? 'false' : 'true'}">
                   ${n.ativa ? 'Desativar' : 'Ativar'}</button>
                 <button class="btn btn-mini btn-perigo" data-nuvem-remover="${n.id}"
@@ -3535,6 +3540,37 @@ function ligarAcoesDasNuvens() {
         aviso('Falha: ' + err.message, 'erro');
         b.disabled = false;
       }
+    });
+  });
+
+  // Migrar o acervo de uma conta para outra.
+  //
+  // A confirmação diz o que vai acontecer com números, e não em abstrato: "1 arquivo" e
+  // "4.000 arquivos" são a mesma frase e decisões muito diferentes. E diz o mais importante
+  // — nada é apagado, e a conta segue servindo enquanto move.
+  $$('[data-nuvem-esvaziar]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      const ligar = b.dataset.valor === 'true';
+      if (ligar) {
+        const n = Number(b.dataset.arquivos) || 0;
+        const ok = await confirmar(`Migrar o acervo de "${b.dataset.nome}"?`,
+          `${n} arquivo(s) serão movidos para a próxima conta com espaço — ou para o disco ` +
+          `desta máquina, se não houver outra conta.\n\n` +
+          `Acontece em segundo plano, um arquivo por vez, e pode levar horas. Nada é ` +
+          `apagado: a conta continua servindo o que ainda não foi movido, e você pode parar ` +
+          `a qualquer momento.\n\n` +
+          `Enquanto migra, esta conta para de receber cópias novas.`,
+          'Migrar');
+        if (!ok) return;
+      }
+      try {
+        await api(`/nuvens/${b.dataset.nuvemEsvaziar}/esvaziar`,
+          { method: 'POST', corpo: { esvaziar: ligar } });
+        aviso(ligar
+          ? 'Migração iniciada. Acompanhe pela contagem de arquivos desta conta.'
+          : 'Migração interrompida. O que já foi movido continua no destino.', 'ok');
+        recarregarAcervo();
+      } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
     });
   });
 
