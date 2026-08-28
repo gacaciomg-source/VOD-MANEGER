@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -196,5 +197,29 @@ func (s *Server) handleApagarArquivo(w http.ResponseWriter, r *http.Request) {
 		nivel = "warn"
 	}
 	s.logEvent(r, "acervo", nivel, "arquivo removido do acervo ("+arquivo.Origem+")", actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleTentarDeNovo devolve uma cópia com erro à fila.
+//
+// Existe porque a causa mais comum de falha é passageira e externa: a fonte recusou por
+// excesso de acesso, a credencial venceu e foi renovada, o disco encheu e foi liberado. O
+// sistema já tenta de novo sozinho algumas vezes, mas depois de esgotar as tentativas ele
+// para — e quem administra costuma saber, antes do sistema, que a causa deixou de existir.
+func (s *Server) handleTentarDeNovo(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	if err := s.deps.Store.ReenfileirarArquivo(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, s.deps.Log, http.StatusNotFound, "nao_encontrado",
+				"este arquivo não está com erro")
+			return
+		}
+		s.fail(w, r, err, "reenfileirando arquivo do acervo")
+		return
+	}
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true})
 }

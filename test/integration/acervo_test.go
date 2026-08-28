@@ -376,3 +376,81 @@ func TestVariantesDoAlvoExecuta(t *testing.T) {
 		}
 	}
 }
+
+// TestCopiaComFalhaVoltaParaAFila cobre a decisão entre "tenta de novo" e "desiste".
+//
+// A causa mais comum de falha numa fonte de IPTV é temporária: "403 Forbidden" quase nunca
+// significa "você não tem direito a este filme", e sim "você pediu demais nesta hora". Antes
+// disto, a primeira falha aposentava o título para sempre.
+//
+// O limite existe pelo motivo oposto: um link morto seria retentado para sempre, uma conexão
+// a cada ciclo, por meses, para nunca funcionar.
+func TestCopiaComFalhaVoltaParaAFila(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+	filme, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Teste de Retentativa", NormalizedTitle: "teste de retentativa",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	variante, err := env.Store.CreateVariant(ctx, store.NewVariant{
+		SourceID: fonte.ID, TargetKind: "content", TargetID: filme.ID,
+		ExternalID: "retentativa:1", OriginURL: "http://exemplo.tld/f.mp4", ContainerExt: "mp4",
+	})
+	if err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+	arquivo, err := env.Store.EnfileirarArquivo(ctx, store.NovoArquivo{
+		VariantID: &variante.ID, TargetKind: "content", TargetID: filme.ID,
+		Backend: store.BackendLocal, Origem: store.OrigemFonte,
+	})
+	if err != nil {
+		t.Fatalf("EnfileirarArquivo: %v", err)
+	}
+
+	// As primeiras falhas devolvem à fila, com espera.
+	for i := 1; i < store.MaxTentativasDeCopia; i++ {
+		if err := env.Store.FalharArquivo(ctx, arquivo.ID, "a fonte respondeu 403 Forbidden"); err != nil {
+			t.Fatalf("FalharArquivo %d: %v", i, err)
+		}
+		atual, err := env.Store.ArquivoPorID(ctx, arquivo.ID)
+		if err != nil {
+			t.Fatalf("ArquivoPorID: %v", err)
+		}
+		if atual.Estado != store.ArquivoPendente {
+			t.Fatalf("falha %d de %d devia voltar à fila, e o estado é %q",
+				i, store.MaxTentativasDeCopia, atual.Estado)
+		}
+		// Em espera, a fila não pode enxergá-la — senão o baixador repetiria na hora o
+		// pedido que a fonte acabou de recusar.
+		if _, err := env.Store.TomarDaFila(ctx); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("uma cópia em espera não pode ser tomada da fila; veio: %v", err)
+		}
+	}
+
+	// A última esgota o limite e vira erro definitivo.
+	if err := env.Store.FalharArquivo(ctx, arquivo.ID, "a fonte respondeu 403 Forbidden"); err != nil {
+		t.Fatalf("FalharArquivo final: %v", err)
+	}
+	atual, err := env.Store.ArquivoPorID(ctx, arquivo.ID)
+	if err != nil {
+		t.Fatalf("ArquivoPorID: %v", err)
+	}
+	if atual.Estado != store.ArquivoErro {
+		t.Fatalf("esgotadas as tentativas, o estado devia ser erro; é %q", atual.Estado)
+	}
+
+	// "Tentar de novo" zera a contagem: quem clica está dizendo que a causa mudou.
+	if err := env.Store.ReenfileirarArquivo(ctx, arquivo.ID); err != nil {
+		t.Fatalf("ReenfileirarArquivo: %v", err)
+	}
+	if _, err := env.Store.TomarDaFila(ctx); err != nil {
+		t.Fatalf("depois de reenfileirar, a fila devia entregá-la: %v", err)
+	}
+}

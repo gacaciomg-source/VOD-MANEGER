@@ -238,6 +238,10 @@ func (s *Store) TomarDaFila(ctx context.Context) (*ArquivoGuardado, error) {
 		WHERE id = (
 			SELECT id FROM arquivos_guardados
 			WHERE estado = 'pendente'
+			  -- A espera de quem falhou. Sem isto, uma copia que acabou de errar seria
+			  -- retomada no ciclo seguinte, trinta segundos depois — repetindo na hora
+			  -- exatamente o pedido que a fonte acabou de recusar.
+			  AND (tentar_apos IS NULL OR tentar_apos <= now())
 			-- Adiantados primeiro, e por um motivo de prazo, nao de importancia.
 			--
 			-- Um adiantamento tem hora marcada: o espectador chega no proximo episodio em
@@ -297,10 +301,37 @@ func (s *Store) FalharArquivo(ctx context.Context, id int64, motivo string) erro
 	if len(motivo) > limite {
 		motivo = motivo[:limite]
 	}
-	_, err := s.pool.Exec(ctx,
-		`UPDATE arquivos_guardados SET estado = 'erro', erro = $2 WHERE id = $1`, id, motivo)
+	// A decisão entre "tenta de novo" e "desiste" acontece NO BANCO, numa instrução só.
+	//
+	// Ela depende do número de tentativas já feitas, e lê-lo antes para decidir aqui abriria
+	// uma janela entre a leitura e a escrita — dois trabalhadores falhando no mesmo arquivo
+	// contariam uma tentativa só, e o limite nunca chegaria.
+	//
+	// A espera dobra: 15 minutos, 30, 60. Se a fonte recusou por excesso de acesso, insistir
+	// na hora é repetir o que causou a recusa. Dobrar dá tempo de o limite virar e desiste
+	// rápido quando a causa é permanente.
+	_, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados SET
+			tentativas  = tentativas + 1,
+			erro        = $2,
+			estado      = CASE WHEN tentativas + 1 >= $3 THEN 'erro' ELSE 'pendente' END,
+			tentar_apos = CASE WHEN tentativas + 1 >= $3 THEN NULL
+			                   ELSE now() + (make_interval(mins => 15) * power(2, tentativas))
+			              END
+		WHERE id = $1`, id, motivo, MaxTentativasDeCopia)
 	return wrapErr("registrando falha do arquivo", err)
 }
+
+// MaxTentativasDeCopia é quantas vezes uma cópia é tentada antes de o erro virar definitivo.
+//
+// Três, e não infinitas: um link morto seria retentado para sempre — uma consulta e uma
+// conexão a cada ciclo, por meses, para nunca funcionar. O limite faz "falha permanente" ser
+// uma conclusão que o sistema alcança sozinho, em vez de um estado que ele nunca revisita.
+//
+// E três, e não uma: a falha mais comum de fonte de IPTV é temporária. "403 Forbidden"
+// raramente significa "você não tem direito a este filme" — significa "você pediu demais
+// nesta hora", e uma hora depois a mesma URL entrega o vídeo inteiro.
+const MaxTentativasDeCopia = 3
 
 // RegistrarAcessoAoArquivo conta mais um uso.
 //
@@ -815,6 +846,26 @@ func (s *Store) TrazerParaODisco(ctx context.Context, id int64, localizador stri
 	}
 	if tag.RowsAffected() == 0 {
 		return wrapErr("trazendo a cópia para o disco", ErrNotFound)
+	}
+	return nil
+}
+
+// ReenfileirarArquivo devolve uma cópia com erro à fila, zerando as tentativas.
+//
+// É o "tentar de novo" do painel. Zerar as tentativas é o ponto: quem clica está dizendo que
+// a causa mudou — a fonte voltou, a credencial foi renovada, o espaço apareceu — e manter a
+// contagem faria a cópia esgotar o limite em uma tentativa e voltar ao mesmo erro.
+func (s *Store) ReenfileirarArquivo(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados
+		SET estado = 'pendente', erro = '', tentativas = 0, tentar_apos = NULL,
+		    bytes_baixados = 0
+		WHERE id = $1 AND estado = 'erro'`, id)
+	if err != nil {
+		return wrapErr("reenfileirando arquivo", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return wrapErr("reenfileirando arquivo", ErrNotFound)
 	}
 	return nil
 }

@@ -3207,6 +3207,10 @@ function linhaDoAcervo(a) {
       <td class="numero">${num(a.acessos)}</td>
       <td><span class="etiqueta ${classe}">${rotulo}</span></td>
       <td><div class="grupo-botoes">
+        ${a.estado === 'erro' ? `
+          <button class="btn btn-mini" data-tentar="${a.id}"
+                  title="Devolve esta cópia à fila e zera as tentativas. Use quando a causa do erro já tiver passado.">
+            Tentar de novo</button>` : ''}
         ${a.origem === 'fonte' ? `
           <button class="btn btn-mini" data-proteger="${a.id}" data-valor="${a.protegido ? 'false' : 'true'}"
                   data-titulo="${esc(a.titulo || '')}">
@@ -3492,6 +3496,20 @@ function ligarAcoesDoAcervo(resumo) {
   //
   // Cache: a fonte ainda tem o original, então o custo é uma releitura. Acervo próprio: não
   // existe em lugar nenhum além daqui, e não há de onde trazer de volta.
+  $$('[data-tentar]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await api(`/acervo/arquivos/${b.dataset.tentar}/tentar`, { method: 'POST' });
+        aviso('De volta à fila. O baixador pega em até trinta segundos.', 'ok');
+        recarregarAcervo();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    };
+  });
+
   $$('[data-apagar-arquivo]').forEach(b => {
     b.onclick = () => comAcao(async () => {
       const proprio = b.dataset.origem === 'proprio';
