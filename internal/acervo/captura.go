@@ -347,7 +347,27 @@ func (s *Servico) TalvezAdiantarProximo(ctx context.Context, alvo *store.StreamT
 		Origem:       store.OrigemFonte,
 		ContainerExt: v.ContainerExt,
 	}
-	if pol.Destino == store.BackendNuvem {
+
+	// O adiantamento pode ir direto para a nuvem, mesmo com o destino padrão no disco.
+	//
+	// Ele é uma APOSTA: ninguém abriu aquele episódio ainda, e o espectador pode largar a
+	// série no anterior. Ocupar o disco — que serve quem está assistindo AGORA — com uma
+	// aposta é caro quando o disco é pequeno.
+	//
+	// E o que o adiantamento entrega não é armazenamento rápido: é NÃO PRECISAR DA FONTE. A
+	// fonte responde em mais de um segundo e corta entregas no meio; a nuvem responde em
+	// centenas de milissegundos e não corta. A troca perde pouco e libera muito.
+	//
+	// Sem conta de nuvem, segue no disco: adiantar no disco é melhor que não adiantar.
+	backend := pol.Destino
+	if pol.AdiantarNaNuvem {
+		if nuvem, err := s.store.NuvemParaGravar(ctx, 0); err == nil {
+			backend = store.BackendNuvem
+			novo.Backend = store.BackendNuvem
+			novo.NuvemID = &nuvem.ID
+		}
+	}
+	if novo.NuvemID == nil && backend == store.BackendNuvem {
 		nuvem, err := s.store.NuvemParaGravar(ctx, 0)
 		if err != nil {
 			return
@@ -355,8 +375,8 @@ func (s *Servico) TalvezAdiantarProximo(ctx context.Context, alvo *store.StreamT
 		novo.NuvemID = &nuvem.ID
 	}
 
-	destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID)
-	if err != nil || !s.HaOndeGuardar(ctx, pol, pol.Destino, destino) {
+	destino, err := s.backendDaPolitica(ctx, Politica{Destino: backend}, novo.NuvemID)
+	if err != nil || !s.HaOndeGuardar(ctx, pol, backend, destino) {
 		return
 	}
 

@@ -3832,6 +3832,48 @@ async function verConfiguracoes() {
         </label>
       </div>
 
+      ${c.cache_backend === 'nuvem' ? `
+        <div class="veredito alerta" style="margin:4px 0 12px">
+          <b>Com a nuvem como destino, nada passa pelo disco.</b>
+          Todo conteúdo é gravado direto na conta, e toda reprodução do cache paga a
+          latência dela — inclusive os títulos mais assistidos, que são justamente os que o
+          disco atenderia em milissegundos.
+          <br><br>
+          Para as duas camadas — rápido no disco, frio na nuvem — escolha
+          <b>Disco desta máquina</b>. A nuvem continua sendo usada: ela recebe tudo o que
+          esfriar.
+        </div>` : ''}
+
+      <label class="linha-check" style="margin:4px 0 10px">
+        <input type="checkbox" id="cfg-cache-arquivar"
+               ${c.cache_arquivar_sempre === 'true' ? 'checked' : ''}>
+        Mandar para a nuvem assim que passar a carência, sem esperar o disco encher
+      </label>
+      <p class="dica" style="margin:-4px 0 12px">
+        Sem isto, o sistema só arquiva quando o disco aperta — e aperto já significa cópias
+        falhando por falta de espaço. Com disco pequeno, marcar mantém o disco sempre
+        folgado para o que estiver quente agora. Custa banda: cada arquivo sobe para a nuvem
+        mesmo quando ainda cabia aqui.
+      </p>
+
+      <label class="linha-check" style="margin:4px 0 10px">
+        <input type="checkbox" id="cfg-cache-adiantar-nuvem"
+               ${c.cache_adiantar_na_nuvem === 'true' ? 'checked' : ''}>
+        Baixar o próximo episódio direto na nuvem, sem passar pelo disco
+      </label>
+      <p class="dica" style="margin:-4px 0 12px">
+        O adiantamento é uma aposta: ninguém abriu aquele episódio ainda, e o espectador pode
+        largar a série no anterior. Marcando, o disco fica livre para quem está assistindo
+        agora.
+        <br>
+        Perde-se pouco. O que o adiantamento entrega não é armazenamento rápido — é
+        <b>não precisar da fonte</b>, que responde em mais de um segundo e corta entregas no
+        meio. A nuvem responde em centenas de milissegundos e não corta.
+        <br>
+        Sem conta de nuvem cadastrada, ele continua indo para o disco: adiantar no disco é
+        melhor que não adiantar.
+      </p>
+
       <div class="veredito info" style="margin:4px 0 12px">
         <b>Quando a limpeza começa.</b> Os dois campos acima são gatilhos, e vale o que
         disparar primeiro:
@@ -3942,6 +3984,8 @@ async function verConfiguracoes() {
           cache_espaco_minimo_pct: Number($("#cfg-cache-folga").value) || 0,
           // Em GB na tela, em bytes no banco: ninguem digita 53687091200 sem errar um zero.
           cache_limite_bytes: Math.round((Number($("#cfg-cache-teto").value) || 0) * (1024 ** 3)),
+          cache_arquivar_sempre: $("#cfg-cache-arquivar").checked,
+          cache_adiantar_na_nuvem: $("#cfg-cache-adiantar-nuvem").checked,
         },
       });
       aviso($('#cfg-cache').checked

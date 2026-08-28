@@ -122,6 +122,21 @@ func (b *Baixador) liberarEspaco(ctx context.Context) bool {
 	}
 
 	disco, temDisco := s.registro.Obter(armazenamento.ChaveLocal)
+
+	// Arquivar sem esperar o aperto.
+	//
+	// O padrão é reagir: só move quando o disco encheu. Com disco pequeno isso chega tarde —
+	// o aperto já significa cópias falhando por falta de espaço, e o arquivamento passa a
+	// competir com os downloads em vez de abrir caminho para eles.
+	//
+	// Ligado, o disco fica permanentemente folgado: tudo que passou da carência já desceu, e
+	// o espaço está livre para o que estiver quente agora. Custa banda — cada arquivo sobe
+	// para a nuvem mesmo quando não precisava — e é uma troca que só quem conhece o próprio
+	// disco pode fazer.
+	if temDisco && pol.ArquivarSempre && b.arquivarUm(ctx, pol, disco) {
+		return true
+	}
+
 	if temDisco && !s.HaOndeGuardar(ctx, pol, store.BackendLocal, disco) {
 		// Degrau 1: mover para a nuvem, se houver conta que receba.
 		if b.arquivarUm(ctx, pol, disco) {

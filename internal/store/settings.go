@@ -70,6 +70,28 @@ const (
 	// "quanto do disco ainda me sobra" —, e a resposta em bytes muda de sentido quando o
 	// disco muda de tamanho.
 	SettingCacheEspacoMinimoPct = "cache_espaco_minimo_pct"
+
+	// SettingCacheArquivarSempre decide QUANDO o frio desce para a nuvem.
+	//
+	// Desligado (padrao), o arquivamento so acontece com o disco apertado. E o comportamento
+	// conservador: mover custa banda dos dois lados, e enquanto ha espaco o arquivo ja estava
+	// servindo bem de onde estava.
+	//
+	// Ligado, ele desce assim que passa a carencia, com disco sobrando ou nao. Faz sentido
+	// quando o disco e pequeno: em vez de esperar o aperto e reagir a ele, o disco fica
+	// permanentemente folgado, pronto para o que estiver quente agora. Troca banda por folga.
+	SettingCacheArquivarSempre = "cache_arquivar_sempre"
+
+	// SettingCacheAdiantarNaNuvem manda o proximo episodio direto para a nuvem.
+	//
+	// O adiantamento e uma APOSTA: ninguem abriu aquele episodio ainda, e o espectador pode
+	// largar a serie no anterior. Ocupar o disco — que e o recurso escasso e serve quem esta
+	// assistindo AGORA — com uma aposta e caro.
+	//
+	// E o que o adiantamento entrega nao e armazenamento rapido, e sim NAO PRECISAR DA FONTE.
+	// A fonte responde em mais de um segundo e corta entregas; a nuvem responde em centenas
+	// de milissegundos e nao corta. Trocar disco por nuvem aqui perde pouco e libera muito.
+	SettingCacheAdiantarNaNuvem = "cache_adiantar_na_nuvem"
 )
 
 // GetSetting lê uma configuração. Ausência não é erro: devolve o padrão.

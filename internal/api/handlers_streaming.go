@@ -657,6 +657,8 @@ type configPublicaRequest struct {
 	CacheLimiteBytes      *int64  `json:"cache_limite_bytes"`
 	CacheIdadeMinimaHoras *int    `json:"cache_idade_minima_horas"`
 	CacheEspacoMinimoPct  *int    `json:"cache_espaco_minimo_pct"`
+	CacheArquivarSempre   *bool   `json:"cache_arquivar_sempre"`
+	CacheAdiantarNaNuvem  *bool   `json:"cache_adiantar_na_nuvem"`
 }
 
 // handleGetSettings devolve as configurações editáveis pelo painel.
@@ -691,6 +693,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"cache_limite_bytes":       s.lerTexto(r, store.SettingCacheLimiteBytes, "0"),
 		"cache_idade_minima_horas": s.lerTexto(r, store.SettingCacheIdadeMinimaHoras, "24"),
 		"cache_espaco_minimo_pct":  s.lerTexto(r, store.SettingCacheEspacoMinimoPct, "10"),
+		"cache_arquivar_sempre":    s.lerBool(r, store.SettingCacheArquivarSempre),
+		"cache_adiantar_na_nuvem":  s.lerBool(r, store.SettingCacheAdiantarNaNuvem),
 		"endereco_atual":           atual,
 		// Divergente quando o endereço que entrega o conteúdo não é por onde você chegou.
 		// Nem sempre é erro — quem separa o domínio do painel do domínio do conteúdo faz
@@ -786,6 +790,20 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheIdadeMinimaHoras,
 			strconv.Itoa(*req.CacheIdadeMinimaHoras)); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+	if req.CacheArquivarSempre != nil {
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheArquivarSempre,
+			strconv.FormatBool(*req.CacheArquivarSempre)); err != nil {
+			s.fail(w, r, err, "gravando configuração do acervo")
+			return
+		}
+	}
+	if req.CacheAdiantarNaNuvem != nil {
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheAdiantarNaNuvem,
+			strconv.FormatBool(*req.CacheAdiantarNaNuvem)); err != nil {
 			s.fail(w, r, err, "gravando configuração do acervo")
 			return
 		}

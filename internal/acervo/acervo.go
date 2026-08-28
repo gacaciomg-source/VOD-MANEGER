@@ -179,6 +179,12 @@ type Politica struct {
 	IdadeMinima time.Duration
 	// EspacoMinimoPct é a folga, em porcentagem, abaixo da qual não se guarda mais nada.
 	EspacoMinimoPct int
+	// ArquivarSempre desce o frio para a nuvem assim que passa a carencia, sem esperar o
+	// disco apertar.
+	ArquivarSempre bool
+	// AdiantarNaNuvem manda o proximo episodio direto para a nuvem, poupando o disco de
+	// uma copia que ninguem pediu ainda.
+	AdiantarNaNuvem bool
 }
 
 // PoliticaAtual lê as configurações do acervo.
@@ -204,6 +210,12 @@ func (s *Servico) PoliticaAtual(ctx context.Context) Politica {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			p.IdadeMinima = time.Duration(n) * time.Hour
 		}
+	}
+	if v, err := s.store.GetSetting(ctx, store.SettingCacheArquivarSempre, "false"); err == nil {
+		p.ArquivarSempre = v == "true"
+	}
+	if v, err := s.store.GetSetting(ctx, store.SettingCacheAdiantarNaNuvem, "false"); err == nil {
+		p.AdiantarNaNuvem = v == "true"
 	}
 	if v, err := s.store.GetSetting(ctx, store.SettingCacheEspacoMinimoPct, ""); err == nil && v != "" {
 		// Aceita de 0 a 90. Acima disso o cache nunca guardaria nada, e a configuração
