@@ -337,3 +337,19 @@ func TestProximoEpisodioAtravessaTemporadas(t *testing.T) {
 		t.Fatalf("depois do último episódio não há próximo; veio: %v", err)
 	}
 }
+
+// TestVariantesDoAlvoExecuta cobre a consulta que dá failover ao baixador.
+//
+// Sem ela o baixador conhece uma origem só, e o efeito apareceu em produção: uma fonte
+// respondeu 403 ao robô e o episódio ficou com erro para sempre — mesmo com outra fonte, na
+// mesma lista, servindo o filme inteiro sem reclamar.
+func TestVariantesDoAlvoExecuta(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	for _, kind := range []string{store.TargetContent, store.TargetEpisode} {
+		if _, err := env.Store.VariantesDoAlvo(ctx, kind, 1); err != nil {
+			t.Fatalf("VariantesDoAlvo(%s): %v", kind, err)
+		}
+	}
+}

@@ -222,9 +222,21 @@ func (b *Baixador) umaCopia(ctx context.Context, numero int) bool {
 	if err := b.copiar(ctx, arquivo); err != nil {
 		// Cancelamento é desligamento do serviço, não falha da cópia: devolver à fila faz
 		// ela recomeçar na próxima subida, em vez de ficar marcada como erro para sempre.
-		if errors.Is(err, context.Canceled) {
+		// Falta de espaço também volta para a fila, e não vira erro.
+		//
+		// Marcar erro aqui aposentaria o título: a linha ficaria vermelha para sempre, e
+		// quando a limpeza abrisse espaço minutos depois ninguém a traria de volta. O
+		// resultado seria um acervo que para de crescer no primeiro aperto e não retoma.
+		//
+		// Não há risco de laço apertado: a fila só é consultada a cada 30 segundos, e a
+		// limpeza roda antes das cópias no mesmo trabalhador.
+		if errors.Is(err, context.Canceled) || errors.Is(err, armazenamento.ErrSemEspaco) {
 			if e := b.store.DevolverAFila(context.Background(), arquivo.ID); e != nil {
 				b.log.Warn("falha ao devolver a cópia à fila", "arquivo_id", arquivo.ID, "erro", e)
+			}
+			if errors.Is(err, armazenamento.ErrSemEspaco) {
+				b.log.Warn("sem espaço para esta cópia; ela volta à fila e espera a limpeza",
+					"arquivo_id", arquivo.ID, "erro", err)
 			}
 			return false
 		}
@@ -240,13 +252,84 @@ func (b *Baixador) umaCopia(ctx context.Context, numero int) bool {
 	return true
 }
 
+// copiar baixa o arquivo, tentando as origens em ordem até uma servir.
+//
+// # Por que o baixador também precisa de failover
+//
+// A reprodução tenta até três origens antes de desistir. O baixador conhecia UMA, e a
+// consequência apareceu em produção: uma fonte respondeu 403 ao robô e o título ficou
+// marcado com erro para sempre — mesmo com outra fonte, na mesma lista, servindo o filme
+// inteiro sem reclamar.
+//
+// O 403 é o caso mais comum e o mais enganoso: fontes distinguem o espectador do robô por
+// cabeçalho, horário ou taxa de acesso. Uma que recusa a cópia pode estar entregando vídeo
+// normalmente naquele instante.
 func (b *Baixador) copiar(ctx context.Context, arquivo *store.ArquivoGuardado) error {
 	if arquivo.VariantID == nil {
 		return errors.New("cópia sem variante de origem")
 	}
-	variante, err := b.store.GetVariant(ctx, *arquivo.VariantID)
-	if err != nil {
-		return fmt.Errorf("buscando a variante: %w", err)
+
+	origens := b.origensDe(ctx, arquivo)
+	var ultimoErro error
+	for i := range origens {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := b.copiarDe(ctx, arquivo, &origens[i])
+		if err == nil {
+			return nil
+		}
+		// Sem espaço não é problema da origem: trocar de fonte não faz caber. Sobe na hora,
+		// para o chamador poder devolver à fila em vez de queimar as demais origens.
+		if errors.Is(err, armazenamento.ErrSemEspaco) || errors.Is(err, context.Canceled) {
+			return err
+		}
+		ultimoErro = err
+		if len(origens) > 1 {
+			b.log.Warn("origem falhou na cópia, tentando a próxima",
+				"arquivo_id", arquivo.ID, "fonte", origens[i].SourceName, "erro", err)
+		}
+	}
+	if ultimoErro == nil {
+		return errors.New("nenhuma origem disponível para esta cópia")
+	}
+	return ultimoErro
+}
+
+// origensDe lista as origens a tentar, começando pela que foi registrada.
+//
+// Em caso de falha ao consultar as irmãs, segue com a original: uma consulta a menos não
+// pode impedir a cópia de acontecer.
+func (b *Baixador) origensDe(ctx context.Context, arquivo *store.ArquivoGuardado) []store.PlayableVariant {
+	irmas, err := b.store.VariantesDoAlvo(ctx, arquivo.TargetKind, arquivo.TargetID)
+	if err != nil || len(irmas) == 0 {
+		v, err := b.store.GetVariant(ctx, *arquivo.VariantID)
+		if err != nil {
+			return nil
+		}
+		return []store.PlayableVariant{{
+			ID: v.ID, SourceID: v.SourceID, OriginURL: v.OriginURL,
+			StreamRef: v.StreamRef, ContainerExt: v.ContainerExt,
+		}}
+	}
+
+	// A variante registrada vem primeiro: é a que a reprodução escolheu, e por isso a mais
+	// provável de servir. As demais entram atrás, na ordem de prioridade.
+	for i := range irmas {
+		if irmas[i].ID == *arquivo.VariantID && i != 0 {
+			irmas[0], irmas[i] = irmas[i], irmas[0]
+			break
+		}
+	}
+	return irmas
+}
+
+func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
+	v *store.PlayableVariant) error {
+
+	variante := &store.SourceVariant{
+		ID: v.ID, SourceID: v.SourceID, OriginURL: v.OriginURL,
+		StreamRef: v.StreamRef, ContainerExt: v.ContainerExt,
 	}
 	url, err := b.resolvedor.ResolveStreamURL(ctx, variante)
 	if err != nil {

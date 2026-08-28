@@ -465,3 +465,15 @@ func (s *Store) ResumoDeFalhas(ctx context.Context) ([]CausaDeFalha, error) {
 	}
 	return out, wrapErr("resumindo falhas", rows.Err())
 }
+
+// VariantesDoAlvo lista as origens jogáveis de um alvo, na ordem de prioridade.
+//
+// Existe para o baixador ter o mesmo repertório que a reprodução. Sem isto, ele conhece uma
+// origem só — e uma fonte que responde 403 para o robô, mas serve o espectador normalmente,
+// condena o título a nunca entrar no acervo.
+func (s *Store) VariantesDoAlvo(ctx context.Context, kind string, targetID int64) ([]PlayableVariant, error) {
+	if kind == TargetEpisode {
+		return s.playableVariants(ctx, TargetEpisode, targetID, 0, targetID)
+	}
+	return s.playableVariants(ctx, TargetContent, targetID, targetID, 0)
+}
