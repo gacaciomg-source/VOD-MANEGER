@@ -91,6 +91,52 @@ console.log('\nPainel — app.js');
     : timersCrus.forEach(l => falha(`temporizador cru: ${l.trim()}`));
 }
 
+// ---------------------------------------------------------------------------
+// Campo booleano da API comparado com a STRING 'true'.
+//
+// `lerBool` no servidor devolve um booleano de verdade no JSON. Comparar com `=== 'true'`
+// no painel nunca dá verdadeiro — e o sintoma é traiçoeiro: a configuração É salva, o
+// servidor a respeita, e só a caixa de seleção volta desmarcada. Parece que não salvou.
+//
+// Foi assim com "arquivar sempre" e "adiantar na nuvem": duas caixas que funcionavam e
+// pareciam quebradas.
+//
+// `dataset.x === 'true'` é outra coisa e continua correto: atributo de HTML é sempre texto.
+{
+  const handlers = fs.readFileSync(
+    path.join(__dirname, '..', 'internal', 'api', 'handlers_streaming.go'), 'utf8');
+
+  const booleanos = [...handlers.matchAll(/"([a-z0-9_]+)":\s*s\.lerBool\(/g)].map(m => m[1]);
+  const erradas = [];
+  // Comparação por texto, e não por expressão regular.
+  //
+  // Uma regex montada aqui precisaria de contrabarras dentro de um template literal, e foi
+  // exatamente aí que a primeira versão desta verificação se perdeu: as contrabarras sumiram
+  // na edição, o `\s` virou `s`, e o teste passou a nunca casar com nada — dizendo "ok" para
+  // um arquivo que tinha o defeito. Uma verificação que não pega o próprio caso é pior que
+  // nenhuma, porque dá confiança falsa.
+  //
+  // Sem espaços, as duas formas possíveis viram texto fixo. Sem regex, sem escape, sem como
+  // errar em silêncio.
+  const semEspacos = linhas.map(l => l.split(/\s+/).join(''));
+  booleanos.forEach(campo => {
+    semEspacos.forEach((linha, i) => {
+      if (linha.includes(`.${campo}==='true'`) || linha.includes(`.${campo}=='true'`) ||
+          linha.includes(`.${campo}==="true"`) || linha.includes(`.${campo}=="true"`)) {
+        erradas.push(`${i + 1}: ${campo} vem como booleano, não como texto — ${linhas[i].trim()}`);
+      }
+    });
+  });
+
+  if (booleanos.length === 0) {
+    falha('nenhum campo booleano encontrado na API — a verificação perdeu o alvo');
+  } else if (erradas.length === 0) {
+    ok(`os ${booleanos.length} campos booleanos da API são lidos como booleanos`);
+  } else {
+    erradas.forEach(falha);
+  }
+}
+
 console.log();
 if (falhas === 0) {
   console.log('\x1b[32mTodas as verificações passaram.\x1b[0m\n');

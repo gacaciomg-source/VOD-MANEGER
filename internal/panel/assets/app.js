@@ -3846,7 +3846,7 @@ async function verConfiguracoes() {
 
       <label class="linha-check" style="margin:4px 0 10px">
         <input type="checkbox" id="cfg-cache-arquivar"
-               ${c.cache_arquivar_sempre === 'true' ? 'checked' : ''}>
+               ${c.cache_arquivar_sempre ? 'checked' : ''}>
         Mandar para a nuvem assim que passar a carência, sem esperar o disco encher
       </label>
       <p class="dica" style="margin:-4px 0 12px">
@@ -3858,7 +3858,7 @@ async function verConfiguracoes() {
 
       <label class="linha-check" style="margin:4px 0 10px">
         <input type="checkbox" id="cfg-cache-adiantar-nuvem"
-               ${c.cache_adiantar_na_nuvem === 'true' ? 'checked' : ''}>
+               ${c.cache_adiantar_na_nuvem ? 'checked' : ''}>
         Baixar o próximo episódio direto na nuvem, sem passar pelo disco
       </label>
       <p class="dica" style="margin:-4px 0 12px">

@@ -76,6 +76,10 @@ type Baixador struct {
 	parar chan struct{}
 	fim   sync.WaitGroup
 	errCh chan error
+
+	// medidoEm marca a ultima medicao das contas de nuvem. Tocado so pelo trabalhador 1,
+	// que e o unico que mede — por isso nao precisa de trava.
+	medidoEm time.Time
 }
 
 // NovoBaixador cria o módulo.
@@ -173,6 +177,13 @@ func (b *Baixador) trabalhar(numero int) {
 			case <-ctx.Done():
 			}
 		}()
+
+		// A medição das contas de nuvem só no trabalhador 1: ela é a mesma para todos, e dois
+		// trabalhadores medindo dobrariam as idas ao provedor sem nenhum ganho.
+		if numero == 1 && time.Since(b.medidoEm) >= intervaloDaMedicao {
+			b.medidoEm = time.Now()
+			b.medirNuvens(ctx)
+		}
 
 		// Remoções ANTES de cópias, sempre.
 		//

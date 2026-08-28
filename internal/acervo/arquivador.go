@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/store"
@@ -237,4 +238,61 @@ func (b *Baixador) limparNuvemCheia(ctx context.Context, pol Politica) bool {
 		return false
 	}
 	return b.apagarCopia(ctx, arquivo, destino, store.BackendNuvem)
+}
+
+// intervaloDaMedicao é de quanto em quanto tempo o espaço das contas de nuvem é conferido.
+//
+// Quinze minutos, e não a cada uso: medir é uma ida ao provedor, e a resposta muda devagar —
+// o que ocupa uma conta de nuvem é o que nós mesmos gravamos nela.
+const intervaloDaMedicao = 15 * time.Minute
+
+// medirNuvens pergunta a cada conta quanto espaço ela ainda tem.
+//
+// # Por que isto precisa existir
+//
+// As colunas de cota estavam no banco desde o começo e ninguém as preenchia. A tela dizia
+// "ainda não medido" para sempre — e pior que o texto: `NuvemParaGravar` decide se uma conta
+// pode receber comparando o tamanho pedido com o espaço livre, e sem medição essa comparação
+// era sempre verdadeira. O sistema mandaria arquivos para uma conta cheia até o provedor
+// recusar, um a um.
+//
+// Erros ficam registrados na própria conta, e não só no log: uma conta com token vencido
+// falha em tudo, e a tela precisa dizer isso onde a pessoa vai procurar.
+func (b *Baixador) medirNuvens(ctx context.Context) {
+	nuvens, err := b.store.ListarNuvens(ctx)
+	if err != nil {
+		b.log.Warn("falha ao listar contas de nuvem para medir", "erro", err)
+		return
+	}
+
+	for i := range nuvens {
+		n := &nuvens[i]
+		if !n.Ativa {
+			continue
+		}
+		destino, err := b.servico.BackendDaNuvem(ctx, n.ID)
+		if err != nil {
+			// BackendDaNuvem já registra o motivo na conta. Aqui só seguimos.
+			continue
+		}
+		esp, err := destino.Espaco(ctx)
+		if err != nil {
+			if e := b.store.AnotarErroDaNuvem(ctx, n.ID, "não foi possível medir o espaço: "+err.Error()); e != nil {
+				b.log.Warn("falha ao registrar erro de medição", "conta", n.Nome, "erro", e)
+			}
+			continue
+		}
+		// Ilimitado é uma resposta legítima — contas empresariais existem. Guardado como
+		// total zero, que é como o resto do sistema já lê "não há teto".
+		totais := esp.Total
+		if esp.Ilimitado {
+			totais = 0
+		}
+		if err := b.store.AnotarCotaDaNuvem(ctx, n.ID, esp.Usado, totais); err != nil {
+			b.log.Warn("falha ao anotar a cota da conta", "conta", n.Nome, "erro", err)
+			continue
+		}
+		b.log.Info("espaço da conta de nuvem medido",
+			"conta", n.Nome, "usado", esp.Usado, "total", totais, "ilimitado", esp.Ilimitado)
+	}
 }
