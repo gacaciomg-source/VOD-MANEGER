@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -208,4 +209,65 @@ func (s *Server) handleRemoverNuvem(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logEvent(r, "acervo", "warn", "conta de nuvem removida: "+nuvem.Nome, actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleOrganizarNuvem cria (ou reencontra) a pasta do acervo e passa a usá-la.
+//
+// # Por que um botão, e não um campo para colar o id
+//
+// O escopo é `drive.file`: o sistema só enxerga o que ele mesmo criou. Uma pasta feita à mão
+// na tela do Drive é invisível para ele, e colar o id dela produziria erro em toda gravação
+// — um erro que não diria "esta pasta não é minha".
+//
+// Então a única forma que funciona é o sistema criar a pasta. O campo de id continua
+// existindo para quem repete um cadastro e já tem o id de uma pasta NOSSA.
+//
+// # O que acontece com o que já está na raiz
+//
+// Nada: os arquivos ficam onde estão e continuam sendo servidos. A pasta vale das próximas
+// gravações em diante. Mover os antigos seria uma operação longa sobre centenas de arquivos,
+// com o acervo no ar — e o ganho é só arrumação.
+func (s *Server) handleOrganizarNuvem(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_id", "id inválido")
+		return
+	}
+	if s.deps.Nuvens == nil {
+		writeError(w, s.deps.Log, http.StatusServiceUnavailable, "acervo_indisponivel",
+			"este processo não gerencia o acervo")
+		return
+	}
+
+	backend, err := s.deps.Nuvens.BackendDaNuvem(r.Context(), id)
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadGateway, "conta_indisponivel",
+			"não foi possível falar com a conta: "+err.Error())
+		return
+	}
+	organizavel, ok := backend.(interface {
+		GarantirPasta(context.Context, string) (string, error)
+	})
+	if !ok {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "provedor_sem_pasta",
+			"este provedor não organiza o acervo em pastas")
+		return
+	}
+
+	pasta, err := organizavel.GarantirPasta(r.Context(), armazenamento.PastaPadrao)
+	if err != nil {
+		writeError(w, s.deps.Log, http.StatusBadGateway, "falha_ao_criar_pasta",
+			"não foi possível criar a pasta: "+err.Error())
+		return
+	}
+
+	nuvem, err := s.deps.Store.AtualizarNuvem(r.Context(), id, store.AjusteDeNuvem{PastaRaiz: &pasta})
+	if err != nil {
+		s.fail(w, r, err, "gravando a pasta da conta")
+		return
+	}
+
+	s.logEvent(r, "acervo", "info",
+		"pasta do acervo definida na conta "+nuvem.Nome, actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"nuvem": nuvem, "pasta": pasta})
 }

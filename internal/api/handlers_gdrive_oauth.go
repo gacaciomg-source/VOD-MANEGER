@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"vodmanager/internal/armazenamento"
 	"vodmanager/internal/cryptobox"
 	"vodmanager/internal/store"
 )
@@ -245,10 +246,28 @@ func (s *Server) handleRetornoOAuthDrive(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// A pasta do acervo, criada agora se a pessoa não informou uma.
+	//
+	// Sem isto, os arquivos caem na RAIZ do Drive — no meio dos documentos e fotos de quem
+	// cedeu a conta. Centenas de filmes ali tornam a conta inutilizável para o dono, e a
+	// reação previsível é apagar tudo em massa, levando o acervo junto.
+	//
+	// Falhar aqui não impede o cadastro: uma conta sem pasta funciona, só desorganizada, e
+	// perder a autorização recém-dada por causa disso seria pior. O motivo fica registrado.
+	pasta := item.pastaRaiz
+	if pasta == "" {
+		if id, err := s.criarPastaNoDrive(r.Context(), item, refresh); err != nil {
+			s.deps.Log.Warn("não foi possível criar a pasta do acervo no Drive",
+				"conta", item.nome, "erro", err)
+		} else {
+			pasta = id
+		}
+	}
+
 	if _, err := s.deps.Store.CriarNuvem(r.Context(), store.NovaNuvem{
 		Nome:        item.nome,
 		Provedor:    store.ProvedorGDrive,
-		PastaRaiz:   item.pastaRaiz,
+		PastaRaiz:   pasta,
 		Ordem:       item.ordem,
 		Credenciais: cifrado,
 	}); err != nil {
@@ -405,4 +424,19 @@ func (s *Server) enderecoDoRetornoOAuth(r *http.Request) string {
 		return atual
 	}
 	return s.baseURL(r)
+}
+
+// criarPastaNoDrive monta um backend efêmero só para criar a pasta do acervo.
+//
+// Efêmero porque neste instante a conta ainda não existe no banco — não há id, e o caminho
+// normal de montagem parte dele. É o único ponto do sistema em que isso acontece, e é por um
+// motivo bom: a pasta precisa existir ANTES do cadastro, para o id dela ser gravado junto.
+func (s *Server) criarPastaNoDrive(ctx context.Context, item pendente, refresh string) (string, error) {
+	backend, err := armazenamento.NovoGDrive(item.nome, armazenamento.CredenciaisGDrive{
+		ClientID: item.clientID, ClientSecret: item.clientSecret, RefreshToken: refresh,
+	}, "")
+	if err != nil {
+		return "", err
+	}
+	return backend.GarantirPasta(ctx, armazenamento.PastaPadrao)
 }

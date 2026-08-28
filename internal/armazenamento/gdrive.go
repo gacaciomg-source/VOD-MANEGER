@@ -459,3 +459,97 @@ func (g *GDrive) Espaco(ctx context.Context) (Espaco, error) {
 	}
 	return Espaco{Total: limite, Usado: usado, Livre: livre}, nil
 }
+
+// PastaPadrao é o nome da pasta que o sistema cria na conta.
+//
+// Nome fixo e reconhecível de propósito: quem abrir o Drive precisa entender de onde aqueles
+// arquivos vieram sem consultar ninguém.
+const PastaPadrao = "VOD Manager"
+
+// GarantirPasta cria a pasta do acervo e devolve o id dela.
+//
+// # Por que criar, e não pedir que a pessoa informe
+//
+// O escopo é `drive.file`: o sistema só enxerga o que ele mesmo criou. Uma pasta feita à mão
+// na tela do Drive é invisível para ele — colar o id dela produziria erro em toda gravação,
+// e o erro não diria "esta pasta não é minha".
+//
+// Criando aqui, a pasta nasce nossa e passa a funcionar. É a única forma que o escopo
+// permite, e a mais segura: continuamos sem enxergar nada que já estava na conta.
+//
+// # Por que não deixar na raiz
+//
+// A raiz é onde estão os documentos e fotos de quem cedeu a conta. Despejar centenas de
+// filmes ali torna a conta inutilizável para o dono — e a primeira reação, previsivelmente,
+// é apagar tudo em massa, levando o acervo junto.
+func (g *GDrive) GarantirPasta(ctx context.Context, nome string) (string, error) {
+	token, err := g.acessar(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Procura antes de criar: reautorizar a mesma conta não pode encher o Drive de pastas
+	// repetidas com o mesmo nome.
+	//
+	// `trashed = false` importa — uma pasta na lixeira ainda aparece na busca, e devolver o
+	// id dela faria as gravações irem parar no lixo.
+	busca := driveArquivos + "?q=" + url.QueryEscape(
+		"mimeType = 'application/vnd.google-apps.folder' and name = '"+
+			strings.ReplaceAll(nome, "'", `\'`)+"' and trashed = false") +
+		"&fields=files(id)&pageSize=1"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, busca, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("procurando a pasta na conta %q: %w", g.nome, err)
+	}
+	corpo, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var achado struct {
+			Files []struct {
+				ID string `json:"id"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(corpo, &achado) == nil && len(achado.Files) > 0 {
+			return achado.Files[0].ID, nil
+		}
+	}
+
+	meta, err := json.Marshal(map[string]any{
+		"name":     nome,
+		"mimeType": "application/vnd.google-apps.folder",
+	})
+	if err != nil {
+		return "", err
+	}
+	criar, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		driveArquivos+"?fields=id", bytes.NewReader(meta))
+	if err != nil {
+		return "", err
+	}
+	criar.Header.Set("Authorization", "Bearer "+token)
+	criar.Header.Set("Content-Type", "application/json")
+
+	res, err := g.http.Do(criar)
+	if err != nil {
+		return "", fmt.Errorf("criando a pasta na conta %q: %w", g.nome, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("a conta %q respondeu %s ao criar a pasta", g.nome, res.Status)
+	}
+	var nova struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &nova); err != nil || nova.ID == "" {
+		return "", fmt.Errorf("resposta inesperada ao criar a pasta na conta %q", g.nome)
+	}
+	return nova.ID, nil
+}

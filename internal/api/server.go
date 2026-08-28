@@ -52,6 +52,12 @@ type Deps struct {
 	// guarda mídia — os handlers do acervo respondem sem a parte de espaço em vez de
 	// estourar.
 	Armazenamento *armazenamento.Registro
+	// Nuvens monta contas de nuvem sob demanda.
+	//
+	// Interface estreita, e nao o servico do acervo inteiro: o unico poder que a API
+	// precisa aqui e falar com uma conta ja cadastrada. Passar o servico completo daria
+	// ao plano de controle acesso a decisoes de guarda e limpeza que nao sao dele.
+	Nuvens MontadorDeNuvens
 	// Sistema mede o consumo de recursos da máquina. Nulo desliga a tela de sistema em
 	// vez de derrubar o processo.
 	Sistema *sysinfo.Coletor
@@ -190,6 +196,7 @@ func (s *Server) routes() chi.Router {
 					// navegador no retorno.
 					r.Post("/nuvens/oauth/iniciar", s.handleIniciarOAuthDrive)
 					r.Get("/nuvens/oauth/retorno", s.handleRetornoOAuthDrive)
+					r.Post("/nuvens/{id}/pasta", s.handleOrganizarNuvem)
 					r.Patch("/nuvens/{id}", s.handleAjustarNuvem)
 					r.Delete("/nuvens/{id}", s.handleRemoverNuvem)
 				})
@@ -333,3 +340,8 @@ func (m *Module) Stop(ctx context.Context) error {
 
 // Err devolve o canal de erro fatal do listener.
 func (m *Module) Err() <-chan error { return m.errCh }
+
+// MontadorDeNuvens é o que a API precisa saber sobre contas de nuvem.
+type MontadorDeNuvens interface {
+	BackendDaNuvem(ctx context.Context, id int64) (armazenamento.Backend, error)
+}

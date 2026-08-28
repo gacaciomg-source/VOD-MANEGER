@@ -3257,6 +3257,10 @@ function desenharNuvens(resumo) {
                   <div class="dica">${num(n.arquivos)} arquivo(s)</div></td>
               <td>${estado}</td>
               <td><div class="grupo-botoes">
+                ${n.pasta_raiz ? '' : `
+                  <button class="btn btn-mini" data-nuvem-pasta="${n.id}"
+                          title="Cria uma pasta &quot;VOD Manager&quot; na conta e passa a gravar dentro dela. Os arquivos que já estão na raiz continuam onde estão.">
+                    Criar pasta</button>`}
                 <button class="btn btn-mini" data-nuvem-leitura="${n.id}"
                         data-valor="${n.somente_leitura ? 'false' : 'true'}"
                         title="Para de receber cópias novas, sem parar de servir o que já está lá">
@@ -3518,6 +3522,21 @@ function ligarAcoesDasNuvens() {
       recarregarAcervo();
     } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
   };
+
+  $$('[data-nuvem-pasta]').forEach(b => {
+    b.onclick = () => comAcao(async () => {
+      b.disabled = true;
+      try {
+        await api(`/nuvens/${b.dataset.nuvemPasta}/pasta`, { method: 'POST' });
+        aviso('Pasta criada. As próximas cópias vão para dentro dela; as que já estão na ' +
+              'raiz continuam onde estão e seguem sendo servidas.', 'ok');
+        recarregarAcervo();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    });
+  });
 
   $$('[data-nuvem-leitura]').forEach(b => {
     b.onclick = () => comAcao(() => {
