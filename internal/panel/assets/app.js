@@ -3242,9 +3242,7 @@ function desenharNuvens(resumo) {
           <th class="numero">Guardado aqui</th><th>Estado</th><th style="width:1%"></th>
         </tr></thead>
         <tbody>${nuvens.map(n => {
-          const cota = (n.bytes_totais && n.bytes_usados !== null)
-            ? `${formatarBytes(n.bytes_usados)} de ${formatarBytes(n.bytes_totais)}`
-            : '<span class="discreto">ainda não medido</span>';
+          const cota = espacoDaNuvem(n);
           let estado = '<span class="etiqueta ok">recebendo</span>';
           if (!n.ativa) estado = '<span class="etiqueta neutro">desativada</span>';
           else if (n.somente_leitura) estado = '<span class="etiqueta alerta">só leitura</span>';
@@ -4791,4 +4789,32 @@ function avisoDaLimpeza(resumo) {
          Apagar é decisão sua, aqui embaixo.`
       : 'Não há cópias de cache no disco. O espaço está sendo usado por outra coisa nesta máquina.'}
   </div></div>`;
+}
+
+/**
+ * O espaço de uma conta de nuvem, com a diferença entre três estados que já foram um só.
+ *
+ * A versão anterior perguntava `if (n.bytes_totais && ...)` e mandava tudo o mais para
+ * "ainda não medido". Isso confundia duas coisas bem diferentes:
+ *
+ *   - conta SEM LIMITE, que o sistema guarda como total zero — e zero é falso em JavaScript,
+ *     então uma conta medida com sucesso aparecia como não medida;
+ *   - medição que FALHOU, cujo motivo estava guardado e não era mostrado nesta coluna.
+ *
+ * `medida_em` é o campo que responde "foi medida?", e é ele que decide aqui. Os bytes
+ * respondem outra pergunta.
+ */
+function espacoDaNuvem(n) {
+  if (!n.medida_em) {
+    return n.ultimo_erro
+      ? '<span class="discreto" style="color:var(--erro)">a medição falhou</span>'
+      : '<span class="discreto">medindo…</span>';
+  }
+  if (!n.bytes_totais) {
+    return `<b>sem limite</b><div class="dica">${formatarBytes(n.bytes_usados || 0)} em uso</div>`;
+  }
+  const livre = Math.max(0, n.bytes_totais - (n.bytes_usados || 0));
+  const pct = Math.round(((n.bytes_usados || 0) / n.bytes_totais) * 100);
+  return `<b>${formatarBytes(livre)} livres</b>
+    <div class="dica">${formatarBytes(n.bytes_usados || 0)} de ${formatarBytes(n.bytes_totais)} · ${pct}%</div>`;
 }
