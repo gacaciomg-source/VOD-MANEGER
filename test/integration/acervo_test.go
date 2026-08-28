@@ -267,3 +267,73 @@ func TestCicloDaContaDeNuvemExecuta(t *testing.T) {
 		t.Fatalf("RemoverNuvem: %v", err)
 	}
 }
+
+// TestProximoEpisodioAtravessaTemporadas cobre a consulta que faz o adiantamento existir.
+//
+// Ela ficou QUEBRADA em produção sem que ninguém percebesse, e o motivo importa: a coluna é
+// `series_content_id`, e eu escrevi `content_id`. O Postgres recusava a consulta a cada
+// reprodução de série, e `TalvezAdiantarProximo` engolia o erro como um aviso no log — então
+// o recurso simplesmente não acontecia, sem nada quebrar.
+//
+// É o padrão que mais custou tempo neste projeto: consulta que compila, falha ao executar, e
+// tem o erro tratado como "não deu, siga em frente".
+//
+// O caso da virada de temporada é o que mais se esquece de testar, e é justamente o que uma
+// implementação ingênua — "mesma temporada, episódio + 1" — erra. Ele só apareceria no fim
+// de cada temporada, que é quando ninguém está olhando.
+func TestProximoEpisodioAtravessaTemporadas(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	serie, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentSeries, Title: "Série de Teste", NormalizedTitle: "serie de teste",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+
+	t1, err := env.Store.EnsureSeason(ctx, serie.ID, 1)
+	if err != nil {
+		t.Fatalf("EnsureSeason 1: %v", err)
+	}
+	t2, err := env.Store.EnsureSeason(ctx, serie.ID, 2)
+	if err != nil {
+		t.Fatalf("EnsureSeason 2: %v", err)
+	}
+
+	ep20, err := env.Store.EnsureEpisode(ctx, t1, 20, "Vinte", "", "", nil)
+	if err != nil {
+		t.Fatalf("EnsureEpisode 20: %v", err)
+	}
+	ep21, err := env.Store.EnsureEpisode(ctx, t1, 21, "Vinte e um", "", "", nil)
+	if err != nil {
+		t.Fatalf("EnsureEpisode 21: %v", err)
+	}
+	t2e1, err := env.Store.EnsureEpisode(ctx, t2, 1, "Nova temporada", "", "", nil)
+	if err != nil {
+		t.Fatalf("EnsureEpisode T2E1: %v", err)
+	}
+
+	// O caso comum: dentro da mesma temporada.
+	proximo, err := env.Store.ProximoEpisodio(ctx, ep20)
+	if err != nil {
+		t.Fatalf("ProximoEpisodio(20): %v", err)
+	}
+	if proximo != ep21 {
+		t.Fatalf("depois do 20 vem o 21; veio %d", proximo)
+	}
+
+	// O caso esquecido: o último da temporada leva ao primeiro da seguinte.
+	proximo, err = env.Store.ProximoEpisodio(ctx, ep21)
+	if err != nil {
+		t.Fatalf("ProximoEpisodio(21): %v", err)
+	}
+	if proximo != t2e1 {
+		t.Fatalf("depois do último da T1 vem o T2E1; veio %d", proximo)
+	}
+
+	// O fim da série não é erro: é o fim.
+	if _, err := env.Store.ProximoEpisodio(ctx, t2e1); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("depois do último episódio não há próximo; veio: %v", err)
+	}
+}

@@ -579,7 +579,7 @@ func (s *Store) ProximoEpisodio(ctx context.Context, episodeID int64) (int64, er
 		SELECT e2.id
 		FROM episodes e
 		JOIN seasons  s  ON s.id  = e.season_id
-		JOIN seasons  s2 ON s2.content_id = s.content_id
+		JOIN seasons  s2 ON s2.series_content_id = s.series_content_id
 		JOIN episodes e2 ON e2.season_id = s2.id AND e2.status <> 'deleted'
 		WHERE e.id = $1
 		  AND (s2.season_number, e2.episode_number) > (s.season_number, e.episode_number)
