@@ -197,6 +197,7 @@ func (s *Server) routes() chi.Router {
 					r.Post("/nuvens/oauth/iniciar", s.handleIniciarOAuthDrive)
 					r.Get("/nuvens/oauth/retorno", s.handleRetornoOAuthDrive)
 					r.Post("/acervo/arquivos/{id}/tentar", s.handleTentarDeNovo)
+					r.Post("/acervo/limpar-invalidas", s.handleLimparInvalidas)
 					r.Post("/nuvens/{id}/pasta", s.handleOrganizarNuvem)
 					r.Post("/nuvens/{id}/esvaziar", s.handleEsvaziarNuvem)
 					r.Patch("/nuvens/{id}", s.handleAjustarNuvem)

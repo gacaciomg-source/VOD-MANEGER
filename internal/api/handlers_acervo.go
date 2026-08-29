@@ -223,3 +223,28 @@ func (s *Server) handleTentarDeNovo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true})
 }
+
+// handleLimparInvalidas manda para a remoção toda cópia pequena demais para ser vídeo.
+//
+// # Por que um botão, se o sistema já faz isso na partida
+//
+// A varredura automática roda quando o serviço sobe, e é a que conserta o estrago de uma
+// versão anterior. Mas quem administra descobre o problema NO MEIO do dia — vendo um filme
+// que não abre — e reiniciar o serviço para limpar cortaria todo mundo que está assistindo.
+//
+// O botão é a mesma varredura, na hora, sem derrubar ninguém.
+//
+// Só cache. O acervo próprio nunca entra: um arquivo pequeno que você enviou é um arquivo
+// pequeno que você quis enviar.
+func (s *Server) handleLimparInvalidas(w http.ResponseWriter, r *http.Request) {
+	n, err := s.deps.Store.MarcarCopiasTruncadas(r.Context())
+	if err != nil {
+		s.fail(w, r, err, "limpando cópias inválidas do acervo")
+		return
+	}
+	if n > 0 {
+		s.logEvent(r, "acervo", "info",
+			"cópias inválidas enviadas para remoção: "+strconv.FormatInt(n, 10), actorOf(r), nil)
+	}
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"removidas": n})
+}

@@ -192,6 +192,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		TrustProxy:    cfg.TrustProxy,
 		Version:       version,
 		Armazenamento: discoEContas,
+		// Sem isto, tudo que precisa falar com uma conta de nuvem pelo painel responde
+		// "este processo não gerencia o acervo" — uma mensagem que descreve um Node, e não
+		// uma dependência que ficou por ligar.
+		Nuvens: servicoAcervo,
 		Sistema:       sistema,
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)

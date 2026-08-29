@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,7 +146,9 @@ func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID int64) (*
 	a, err := lerArquivo(s.pool.QueryRow(ctx,
 		`SELECT `+colunasArquivo+` FROM arquivos_guardados
 		 WHERE variant_id = $1 AND estado = 'pronto'
-		   AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`, variantID))
+		   AND bytes >= $2
+		   AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`,
+		variantID, TamanhoMinimoDeVideo))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
@@ -332,6 +335,16 @@ func (s *Store) FalharArquivo(ctx context.Context, id int64, motivo string) erro
 // raramente significa "você não tem direito a este filme" — significa "você pediu demais
 // nesta hora", e uma hora depois a mesma URL entrega o vídeo inteiro.
 const MaxTentativasDeCopia = 3
+
+// TamanhoMinimoDeVideo e o piso abaixo do qual uma copia nao pode ser um video.
+//
+// Um megabyte. Nao e estimativa do tamanho certo — e o limiar da plausibilidade. O que cai
+// aqui e sempre aviso, pagina de erro ou resposta vazia; nunca conteudo.
+//
+// Vive no store, e nao so no baixador, porque a defesa precisa valer tambem na CONSULTA que
+// serve o acervo: uma linha ruim que ja esteja gravada — de uma versao anterior, de um
+// defeito futuro — para de ser servida sem que ninguem precise limpa-la a mao.
+const TamanhoMinimoDeVideo = 1 << 20
 
 // RegistrarAcessoAoArquivo conta mais um uso.
 //
@@ -780,8 +793,16 @@ func (s *Store) MarcarCopiasTruncadas(ctx context.Context) (int64, error) {
 		UPDATE arquivos_guardados SET estado = 'removendo'
 		WHERE estado = 'pronto'
 		  AND origem = 'fonte'
-		  AND bytes_totais IS NOT NULL AND bytes_totais > 0
-		  AND bytes <> bytes_totais`)
+		  AND (
+		    -- Não fecha com o que a fonte anunciou.
+		    (bytes_totais IS NOT NULL AND bytes_totais > 0 AND bytes <> bytes_totais)
+		    -- Ou é pequena demais para ser vídeo, tenha a fonte anunciado tamanho ou não.
+		    --
+		    -- Esta segunda condição existe porque a primeira depende do Content-Length, e uma
+		    -- fonte pode não enviá-lo. Uma página de erro de dois quilobytes passava por aqui
+		    -- intocada, e o acervo a servia no lugar do filme.
+		    OR bytes < `+strconv.FormatInt(TamanhoMinimoDeVideo, 10)+`
+		  )`)
 	if err != nil {
 		return 0, wrapErr("marcando cópias truncadas", err)
 	}

@@ -57,6 +57,17 @@ const intervaloDaFila = 30 * time.Second
 // blocos, e uma escrita no banco por bloco custaria mais que a própria cópia.
 const intervaloDoProgresso = 5 * time.Second
 
+// tamanhoMinimoDeCopia e o piso abaixo do qual uma copia nao pode ser um video.
+//
+// Um megabyte. Nao e uma estimativa do tamanho certo — e o limiar da plausibilidade: nenhum
+// video existe abaixo disso, e o que cai aqui e sempre aviso, pagina de erro ou resposta
+// vazia.
+//
+// Existe porque as demais conferencias dependem do Content-Length, e a fonte pode nao
+// anuncia-lo. Sem este piso, uma pagina de erro de dois quilobytes virava uma copia
+// "pronta" que o acervo passava a servir no lugar da fonte.
+const tamanhoMinimoDeCopia = 1 << 20
+
 // Resolvedor materializa a URL de origem de uma variante.
 //
 // Interface e não implementação concreta, pelo mesmo motivo do plano de dados: este pacote
@@ -426,6 +437,22 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		_ = destino.Apagar(context.Background(), local.Localizador)
 		return fmt.Errorf("a fonte entregou %d de %d bytes; a cópia foi descartada",
 			local.Bytes, resp.ContentLength)
+	}
+
+	// O piso que NÃO depende do Content-Length.
+	//
+	// Toda a conferência acima some quando a fonte não anuncia tamanho — e é justamente aí
+	// que ela mais faria falta: uma fonte que responde 200 com uma página de erro de dois
+	// quilobytes e sem Content-Length passava por essas linhas sem que nada a questionasse.
+	// A cópia virava "pronta", o acervo passava a servi-la no lugar da fonte, e o filme não
+	// abria mais.
+	//
+	// Este piso é sobre plausibilidade, não sobre o tamanho certo: nenhum vídeo tem menos de
+	// um megabyte. O que cai aqui é aviso, página de erro ou resposta vazia — nunca conteúdo.
+	if local.Bytes < tamanhoMinimoDeCopia {
+		_ = destino.Apagar(context.Background(), local.Localizador)
+		return fmt.Errorf("a fonte entregou apenas %d bytes, que não são um vídeo; "+
+			"a cópia foi descartada", local.Bytes)
 	}
 
 	return b.store.ConcluirArquivo(context.Background(), arquivo.ID, local.Localizador, local.Bytes)

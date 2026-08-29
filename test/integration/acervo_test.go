@@ -454,3 +454,57 @@ func TestCopiaComFalhaVoltaParaAFila(t *testing.T) {
 		t.Fatalf("depois de reenfileirar, a fila devia entregá-la: %v", err)
 	}
 }
+
+// TestCopiaPequenaDemaisNaoEServida cobre o piso de plausibilidade.
+//
+// O defeito que ele impede: uma fonte responde 200 com uma página de erro de dois
+// quilobytes e SEM Content-Length. Todas as conferências de tamanho do baixador dependiam
+// desse cabeçalho, então a página virava uma cópia "pronta" — e o acervo passava a servi-la
+// no lugar do filme, que na fonte estava inteiro.
+//
+// Na tela: 1,6 KB, verde, "pronto", com acessos contados. Para o cliente: não abre.
+func TestCopiaPequenaDemaisNaoEServida(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+	filme, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Pagina de Erro", NormalizedTitle: "pagina de erro",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	variante, err := env.Store.CreateVariant(ctx, store.NewVariant{
+		SourceID: fonte.ID, TargetKind: "content", TargetID: filme.ID,
+		ExternalID: "piso:1", OriginURL: "http://exemplo.tld/e.mp4", ContainerExt: "mp4",
+	})
+	if err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+
+	// 1,6 KB gravados como prontos, sem tamanho anunciado — exatamente o caso real.
+	if _, err := env.Store.EnfileirarArquivo(ctx, store.NovoArquivo{
+		VariantID: &variante.ID, TargetKind: "content", TargetID: filme.ID,
+		Backend: store.BackendLocal, Origem: store.OrigemFonte,
+		Localizador: "erro.mp4", Bytes: 1600,
+	}); err != nil {
+		t.Fatalf("EnfileirarArquivo: %v", err)
+	}
+
+	if _, err := env.Store.ArquivoProntoDaVariante(ctx, variante.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("uma cópia de 1,6 KB não pode ser servida como filme; veio: %v", err)
+	}
+
+	// E a varredura tem de alcançá-la, ou ela ocuparia a variante para sempre — impedindo
+	// que o título fosse copiado de novo.
+	n, err := env.Store.MarcarCopiasTruncadas(ctx)
+	if err != nil {
+		t.Fatalf("MarcarCopiasTruncadas: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("a varredura não alcançou a cópia pequena demais")
+	}
+}

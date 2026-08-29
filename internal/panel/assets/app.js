@@ -3104,6 +3104,9 @@ async function verAcervo() {
     <div class="secao-titulo">Arquivos guardados</div>
     <div class="grupo-botoes" style="justify-content:flex-start;margin:0 0 10px">
       <button class="btn btn-primario" id="acervo-enviar">Enviar arquivo</button>
+      <button class="btn" id="acervo-limpar-invalidas"
+              title="Apaga as cópias pequenas demais para serem vídeo — restos de páginas de erro que a fonte devolveu no lugar do filme. Não toca no seu acervo próprio.">
+        Limpar cópias inválidas</button>
     </div>
     <div class="abas">
       ${aba('fonte', 'Cache de fontes', cache)}
@@ -3439,6 +3442,22 @@ function abrirEnvioDeArquivo(categorias) {
 function ligarAcoesDoAcervo(resumo) {
   const enviar = $("#acervo-enviar");
   if (enviar) enviar.onclick = () => abrirEnvioDeArquivo(resumo && resumo.categorias);
+
+  const limpar = $('#acervo-limpar-invalidas');
+  if (limpar) limpar.onclick = async () => {
+    limpar.disabled = true;
+    try {
+      const r = await api('/acervo/limpar-invalidas', { method: 'POST' });
+      aviso(r.removidas > 0
+        ? `${r.removidas} cópia(s) inválida(s) marcadas para remoção. Os títulos voltam a ` +
+          `ser buscados na fonte e serão copiados de novo na próxima reprodução.`
+        : 'Nenhuma cópia inválida encontrada.', 'ok');
+      recarregarAcervo();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      limpar.disabled = false;
+    }
+  };
 
   $$('[data-aba-acervo]').forEach(b => {
     b.onclick = () => {
