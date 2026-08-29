@@ -258,7 +258,21 @@ func (c *Captura) Fechar(completo bool) {
 		return
 	}
 
+	// O piso de plausibilidade mora no store, e vale para todos os caminhos. Quando ele
+	// recusa, o que foi gravado precisa sumir: sem isto o arquivo inútil ficaria no destino
+	// ocupando espaço, sem nenhuma linha apontando para ele — órfão e invisível.
 	if err := s.store.ConcluirArquivo(ctx, c.arquivo.ID, res.localizador, res.bytes); err != nil {
+		if errors.Is(err, store.ErrCopiaImplausivel) {
+			if d, e := s.Backend(ctx, c.arquivo); e == nil {
+				_ = d.Apagar(ctx, res.localizador)
+			}
+			if e := s.store.DevolverAFila(ctx, c.arquivo.ID); e != nil {
+				s.log.Warn("falha ao devolver a captura à fila", "arquivo_id", c.arquivo.ID, "erro", e)
+			}
+			s.log.Warn("captura descartada: a fonte entregou algo pequeno demais para ser vídeo",
+				"arquivo_id", c.arquivo.ID, "bytes", res.bytes)
+			return
+		}
 		s.log.Warn("falha ao concluir a captura", "arquivo_id", c.arquivo.ID, "erro", err)
 		return
 	}

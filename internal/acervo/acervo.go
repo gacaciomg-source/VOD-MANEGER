@@ -338,6 +338,24 @@ func (s *Servico) HaOndeGuardar(ctx context.Context, pol Politica, backend strin
 		}
 	}
 
+	// A nuvem NÃO é consultada aqui.
+	//
+	// Esta função é chamada no caminho do primeiro byte, antes de o vídeo começar a sair. Um
+	// `Espaco()` de conta de nuvem é uma requisição HTTP ao provedor — centenas de
+	// milissegundos, às vezes segundos, com a pessoa olhando a tela parada. Multiplicado por
+	// toda reprodução, foi isso que fez os vídeos pararem de abrir quando o destino padrão
+	// virou a nuvem.
+	//
+	// E a pergunta já tem resposta sem sair daqui: `NuvemParaGravar` só devolve uma conta que
+	// cabe, comparando com a medição gravada no banco — atualizada a cada quinze minutos por
+	// quem pode esperar. Chegar até aqui com uma conta de nuvem já significa que ela cabe.
+	//
+	// O disco local continua sendo medido: `statfs` é uma chamada de sistema local, na casa
+	// dos microssegundos, e não sai da máquina.
+	if backend != store.BackendLocal {
+		return true
+	}
+
 	esp, err := destino.Espaco(ctx)
 	if err != nil || esp.Ilimitado || esp.Total <= 0 {
 		return true

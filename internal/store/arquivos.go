@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -281,19 +282,45 @@ func (s *Store) AnotarProgresso(ctx context.Context, id, baixados int64) error {
 
 // ConcluirArquivo marca a cópia como utilizável.
 func (s *Store) ConcluirArquivo(ctx context.Context, id int64, localizador string, bytes int64) error {
+	// O piso vive AQUI, e não em quem chama.
+	//
+	// Ele já esteve em dois chamadores, e o defeito voltou pelo terceiro. Cada caminho
+	// conferia à sua maneira e cada um tinha um vão diferente:
+	//
+	//   - o baixador comparava com o Content-Length, e a fonte podia não enviá-lo;
+	//   - a captura comparava com o tamanho ANUNCIADO — e uma página de erro de 1,6 KB que
+	//     anuncia 1600 bytes bate certinho com o que prometeu.
+	//
+	// "Recebi o que foi anunciado" e "isto é um vídeo" são perguntas diferentes, e só a
+	// segunda importa aqui. Esta função é por onde toda cópia obrigatoriamente passa para
+	// virar acervo — o único lugar onde a regra não pode ser contornada por um caminho novo.
+	//
+	// Só cache: um arquivo pequeno que alguém enviou pelo painel é um arquivo pequeno que
+	// alguém quis enviar.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE arquivos_guardados
 		SET estado = 'pronto', localizador = $2, bytes = $3, bytes_baixados = $3,
 		    erro = '', concluido_em = now()
-		WHERE id = $1`, id, localizador, bytes)
+		WHERE id = $1
+		  AND (origem <> 'fonte' OR $3::bigint >= $4)`, id, localizador, bytes, TamanhoMinimoDeVideo)
 	if err != nil {
 		return wrapErr("concluindo arquivo", err)
 	}
 	if tag.RowsAffected() == 0 {
+		if bytes < TamanhoMinimoDeVideo {
+			return fmt.Errorf("%w: %d bytes não são um vídeo", ErrCopiaImplausivel, bytes)
+		}
 		return wrapErr("concluindo arquivo", ErrNotFound)
 	}
 	return nil
 }
+
+// ErrCopiaImplausivel: a cópia é pequena demais para ser vídeo.
+//
+// Erro próprio, e não um genérico, porque quem chama precisa reagir de um jeito específico:
+// apagar o que gravou. Um erro sem identidade viraria "falhou por algum motivo", e o arquivo
+// inútil ficaria ocupando espaço no destino sem nenhuma linha apontando para ele.
+var ErrCopiaImplausivel = errors.New("cópia pequena demais para ser vídeo")
 
 // FalharArquivo registra o motivo de não ter dado certo.
 //

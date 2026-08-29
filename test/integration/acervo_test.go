@@ -508,3 +508,69 @@ func TestCopiaPequenaDemaisNaoEServida(t *testing.T) {
 		t.Fatal("a varredura não alcançou a cópia pequena demais")
 	}
 }
+
+// TestConcluirRecusaCopiaImplausivel prende o piso no lugar onde ele não pode ser contornado.
+//
+// Este defeito voltou DUAS vezes, e as duas por caminhos diferentes:
+//
+//   - o baixador comparava com o Content-Length, e a fonte podia não enviá-lo;
+//   - a captura comparava com o tamanho ANUNCIADO — e uma página de erro de 1,6 KB que
+//     anuncia 1600 bytes bate certinho com o que prometeu.
+//
+// Cada correção arrumava um caminho e deixava o outro. Por isso a regra desceu para
+// ConcluirArquivo, por onde toda cópia obrigatoriamente passa para virar acervo: um caminho
+// novo não tem como esquecer de aplicá-la.
+func TestConcluirRecusaCopiaImplausivel(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+	criar := func(titulo, ext string, origem string) int64 {
+		c, err := env.Store.CreateContent(ctx, store.NewContent{
+			Type: store.ContentMovie, Title: titulo, NormalizedTitle: titulo,
+		})
+		if err != nil {
+			t.Fatalf("CreateContent: %v", err)
+		}
+		v, err := env.Store.CreateVariant(ctx, store.NewVariant{
+			SourceID: fonte.ID, TargetKind: "content", TargetID: c.ID,
+			ExternalID: ext, OriginURL: "http://exemplo.tld/x.mp4", ContainerExt: "mp4",
+		})
+		if err != nil {
+			t.Fatalf("CreateVariant: %v", err)
+		}
+		a, err := env.Store.EnfileirarArquivo(ctx, store.NovoArquivo{
+			VariantID: &v.ID, TargetKind: "content", TargetID: c.ID,
+			Backend: store.BackendLocal, Origem: origem,
+		})
+		if err != nil {
+			t.Fatalf("EnfileirarArquivo: %v", err)
+		}
+		return a.ID
+	}
+
+	// Cache de 1,6 KB: recusado, com erro identificável para quem chamou poder apagar o
+	// arquivo que gravou.
+	cache := criar("erro do cache", "piso-cache", store.OrigemFonte)
+	err = env.Store.ConcluirArquivo(ctx, cache, "erro.mp4", 1600)
+	if !errors.Is(err, store.ErrCopiaImplausivel) {
+		t.Fatalf("concluir 1,6 KB de cache devia recusar com ErrCopiaImplausivel; veio: %v", err)
+	}
+	atual, err := env.Store.ArquivoPorID(ctx, cache)
+	if err != nil {
+		t.Fatalf("ArquivoPorID: %v", err)
+	}
+	if atual.Estado == store.ArquivoPronto {
+		t.Fatal("a linha não pode ter ficado pronta depois da recusa")
+	}
+
+	// Acervo próprio do mesmo tamanho: aceito. Um arquivo pequeno que alguém enviou pelo
+	// painel é um arquivo pequeno que alguém quis enviar.
+	proprio := criar("envio pequeno", "piso-proprio", store.OrigemProprio)
+	if err := env.Store.ConcluirArquivo(ctx, proprio, "meu.mp4", 1600); err != nil {
+		t.Fatalf("o piso não pode alcançar o acervo próprio: %v", err)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -382,14 +384,42 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		return fmt.Errorf("conectando à fonte: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// 206 é sucesso, e recusá-lo estava condenando fontes inteiras.
+	//
+	// Não pedimos faixa nenhuma, então o esperado seria 200. Mas várias fontes de IPTV
+	// respondem 206 de qualquer jeito — é o comportamento delas, não um erro. Tratar isso
+	// como falha marcava com erro todo título dessas fontes, uma lista inteira de "a fonte
+	// respondeu 206 Partial Content" para respostas que estavam perfeitamente certas.
+	//
+	// O que precisa ser conferido não é o código, é a FAIXA: um 206 que começa no meio do
+	// arquivo produziria uma cópia sem o começo do filme — inútil e perigosa. Isso é
+	// verificado abaixo, pelo Content-Range.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("a fonte respondeu %s", resp.Status)
+	}
+
+	// A ÚNICA coisa que precisa ser recusada num 206 é começar fora do zero.
+	//
+	// Um arquivo sem o começo não abre em player nenhum — e como não pedimos faixa alguma,
+	// não há o que negociar com a fonte. Todo o resto (entregar em pedaços, anunciar um total
+	// diferente, encerrar antes) é comportamento normal de fonte sob carga, e quem julga isso
+	// é a conferência de tamanho no fim, com os bytes na mão. Não aqui, por antecipação.
+	total := resp.ContentLength
+	if resp.StatusCode == http.StatusPartialContent {
+		if inicio, tam := lerContentRange(resp.Header.Get("Content-Range")); inicio > 0 {
+			return fmt.Errorf("a fonte entregou a partir do byte %d sem que pedíssemos; "+
+				"uma cópia sem o começo não serve", inicio)
+		} else if tam > 0 {
+			// O total do Content-Range vale mais que o Content-Length: este último diz o
+			// tamanho DESTA resposta, e aquele o do arquivo inteiro.
+			total = tam
+		}
 	}
 
 	// O tamanho anunciado vai para o banco antes da cópia começar: é dele que a tela tira a
 	// porcentagem, e sem ele o progresso seria um número subindo sem fim à vista.
-	if resp.ContentLength > 0 {
-		if err := b.store.AnotarTamanhoTotal(ctx, arquivo.ID, resp.ContentLength); err != nil {
+	if total > 0 {
+		if err := b.store.AnotarTamanhoTotal(ctx, arquivo.ID, total); err != nil {
 			b.log.Warn("falha ao anotar o tamanho", "arquivo_id", arquivo.ID, "erro", err)
 		}
 	}
@@ -433,10 +463,10 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 	// A fonte pode ter encerrado antes de entregar o que anunciou. Guardar meio filme como
 	// se estivesse pronto é pior que não guardar: ele passaria a ser servido no lugar da
 	// fonte, e o espectador veria o corte toda vez.
-	if resp.ContentLength > 0 && local.Bytes < resp.ContentLength {
+	if total > 0 && local.Bytes < total {
 		_ = destino.Apagar(context.Background(), local.Localizador)
 		return fmt.Errorf("a fonte entregou %d de %d bytes; a cópia foi descartada",
-			local.Bytes, resp.ContentLength)
+			local.Bytes, total)
 	}
 
 	// O piso que NÃO depende do Content-Length.
@@ -455,7 +485,15 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 			"a cópia foi descartada", local.Bytes)
 	}
 
-	return b.store.ConcluirArquivo(context.Background(), arquivo.ID, local.Localizador, local.Bytes)
+	// Se o piso do store recusar, o que foi gravado precisa sumir: um arquivo sem linha que
+	// aponte para ele é espaço ocupado que ninguém sabe que existe.
+	if err := b.store.ConcluirArquivo(context.Background(), arquivo.ID, local.Localizador, local.Bytes); err != nil {
+		if errors.Is(err, store.ErrCopiaImplausivel) {
+			_ = destino.Apagar(context.Background(), local.Localizador)
+		}
+		return err
+	}
+	return nil
 }
 
 // leitorComProgresso conta os bytes que passam e grava o andamento de tempos em tempos.
@@ -528,4 +566,30 @@ func (b *Baixador) umaRemocao(ctx context.Context) bool {
 	b.log.Info("arquivo removido do acervo",
 		"arquivo_id", arquivo.ID, "bytes", arquivo.Bytes, "onde", arquivo.Backend)
 	return true
+}
+
+// lerContentRange extrai o início e o tamanho total de "bytes 0-1023/2048".
+//
+// Devolve zeros quando não entende, e é de propósito: um cabeçalho estranho não pode virar
+// motivo para recusar uma cópia. Zero significa "não sei", e quem chama trata isso como
+// ausência de informação, não como problema.
+func lerContentRange(cabecalho string) (inicio, total int64) {
+	if !strings.HasPrefix(cabecalho, "bytes ") {
+		return 0, 0
+	}
+	faixa, tamanho, achou := strings.Cut(strings.TrimPrefix(cabecalho, "bytes "), "/")
+	if !achou {
+		return 0, 0
+	}
+	if t, err := strconv.ParseInt(strings.TrimSpace(tamanho), 10, 64); err == nil {
+		total = t
+	}
+	de, _, achou := strings.Cut(faixa, "-")
+	if !achou {
+		return 0, total
+	}
+	if i, err := strconv.ParseInt(strings.TrimSpace(de), 10, 64); err == nil {
+		inicio = i
+	}
+	return inicio, total
 }
