@@ -62,6 +62,9 @@ type Captura struct {
 	// dependeu, e o resultado foi o cache guardar os primeiros cem quilobytes de cada
 	// filme como se fossem o filme inteiro.
 	anunciado int64
+	// devolver libera a vaga de captura. Chamada uma vez, no fim — e obrigatoriamente,
+	// porque uma vaga vazada e uma gravacao a menos para sempre.
+	devolver func()
 }
 
 type resultadoDaCaptura struct {
@@ -82,12 +85,32 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 	if inicio != 0 || tamanho <= 0 {
 		return nil
 	}
+
+	// A vaga é tomada ANTES de qualquer consulta.
+	//
+	// Sem vaga não há captura, e sem captura não há por que perguntar nada ao banco — este
+	// código roda no caminho do primeiro byte, e cada consulta aqui é o espectador esperando.
+	//
+	// `select` com `default`, e nunca esperando: fazer fila por uma vaga seria segurar o
+	// vídeo por causa de uma otimização. Quem não pegou continua assistindo normalmente, e o
+	// filme entra na fila para o baixador pegar depois.
+	select {
+	case s.vagasDeCaptura <- struct{}{}:
+	default:
+		return nil
+	}
+	// A partir daqui, todo caminho de saída precisa devolver a vaga. Uma vaga vazada é uma
+	// gravação a menos para sempre — e três vazadas desligam a captura em silêncio.
+	devolver := func() { <-s.vagasDeCaptura }
+
 	pol := s.PoliticaAtual(ctx)
 	if !pol.Ligado {
+		devolver()
 		return nil
 	}
 	fonte, err := s.store.GetSource(ctx, v.SourceID)
 	if err != nil || !fonte.CacheHabilitado {
+		devolver()
 		return nil
 	}
 
@@ -102,6 +125,7 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 	if pol.Destino == store.BackendNuvem {
 		nuvem, err := s.store.NuvemParaGravar(ctx, tamanho)
 		if err != nil {
+			devolver()
 			return nil
 		}
 		novo.NuvemID = &nuvem.ID
@@ -109,20 +133,24 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 
 	destino, err := s.backendDaPolitica(ctx, pol, novo.NuvemID)
 	if err != nil || !s.HaOndeGuardar(ctx, pol, pol.Destino, destino) {
+		devolver()
 		return nil
 	}
 
 	arquivo, err := s.store.EnfileirarArquivo(ctx, novo)
 	if err != nil {
+		devolver()
 		return nil
 	}
 	// Já pronto, já baixando, ou tomado por outro espectador do mesmo filme neste instante.
 	// A reivindicação é uma troca de estado condicional no banco: só um ganha, e os outros
 	// seguem entregando da fonte sem gravar nada.
 	if arquivo.Estado != store.ArquivoPendente {
+		devolver()
 		return nil
 	}
 	if ok, err := s.store.ReivindicarParaCaptura(ctx, arquivo.ID); err != nil || !ok {
+		devolver()
 		return nil
 	}
 	if err := s.store.AnotarTamanhoTotal(ctx, arquivo.ID, tamanho); err != nil {
@@ -143,6 +171,7 @@ func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 		anunciado: tamanho,
 		pedacos:   make(chan []byte, pedacosNaFila),
 		fim:       make(chan resultadoDaCaptura, 1),
+		devolver:  devolver,
 	}
 
 	// O contexto é o de fundo, e não o da requisição: a gravação precisa poder terminar de
@@ -211,6 +240,12 @@ func (c *Captura) desistir() {
 // cópia vira acervo: metade de um filme guardado como pronto seria servido no lugar da
 // fonte, e o espectador veria o corte toda vez.
 func (c *Captura) Fechar(completo bool) {
+	// A vaga volta ao fim de TODO caminho daqui para baixo, e por isso e um defer: os
+	// desfechos abaixo sao varios, e esquecer um deles desligaria a captura em silencio
+	// depois de tres filmes.
+	if c.devolver != nil {
+		defer c.devolver()
+	}
 	jaDesistiu := c.desistiu
 	c.desistir()
 

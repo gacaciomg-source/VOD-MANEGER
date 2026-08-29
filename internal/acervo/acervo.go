@@ -29,6 +29,16 @@ import (
 	"vodmanager/internal/store"
 )
 
+// capturasSimultaneas e quantas gravacoes cabem ao mesmo tempo.
+//
+// Tres. O numero vem da memoria, e nao de gosto: uma gravacao para a nuvem segura dezesseis
+// megabytes de buffer de envio mais quatro de fila, entao tres sao sessenta megabytes no pior
+// caso — um custo fixo que cabe em qualquer maquina.
+//
+// Passar disso nao melhora nada que se note: quem nao pegou vaga continua assistindo
+// normalmente, e o filme entra na fila para o baixador pegar depois.
+const capturasSimultaneas = 3
+
 // ErrSemBackend: o arquivo aponta para um armazenamento que não está montado.
 //
 // Acontece de verdade: uma conta de nuvem desativada, um disco que não pôde ser criado na
@@ -46,6 +56,16 @@ type Servico struct {
 	// dependa de nenhum provedor específico — e para que o Drive possa existir sem que
 	// nada aqui mude.
 	montarNuvem MontadorDeNuvem
+	// vagasDeCaptura limita quantas gravacoes acontecem ao mesmo tempo.
+	//
+	// Sem teto, cada reproducao nova abria uma gravacao — e cada gravacao para a nuvem
+	// custa dezesseis megabytes de buffer de envio mais quatro de fila. Vinte estreias
+	// simultaneas eram quatrocentos megabytes de uma vez, numa maquina que tambem roda o
+	// banco. O processo ficava sem memoria e parava de responder: o painel nao abria e os
+	// videos tambem nao.
+	//
+	// O cache e um ganho para amanha. Ele nunca pode custar o serviço de hoje.
+	vagasDeCaptura chan struct{}
 }
 
 // MontadorDeNuvem constrói o backend de uma conta a partir das credenciais dela.
@@ -69,6 +89,7 @@ func Novo(o Opcoes) *Servico {
 	return &Servico{
 		store: o.Store, registro: o.Registro, crypto: o.Crypto,
 		log: o.Log, montarNuvem: o.MontarNuvem,
+		vagasDeCaptura: make(chan struct{}, capturasSimultaneas),
 	}
 }
 

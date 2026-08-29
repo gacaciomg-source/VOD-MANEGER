@@ -165,3 +165,39 @@ func deveFalhar(c *Captura, completo bool) bool {
 	}
 	return falhou
 }
+
+// TestVagasDeCapturaLimitamAConcorrencia prende o teto de memória no lugar.
+//
+// Cada gravação para a nuvem segura dezesseis megabytes de buffer de envio mais quatro de
+// fila. Sem teto, toda reprodução nova abria uma — e vinte estreias simultâneas eram
+// quatrocentos megabytes de uma vez, numa máquina que também roda o banco.
+//
+// O `default` no select é o ponto: pedir vaga NUNCA pode esperar. Fazer fila aqui seria
+// segurar o vídeo do espectador por causa de uma otimização que só beneficia o próximo.
+func TestVagasDeCapturaLimitamAConcorrencia(t *testing.T) {
+	vagas := make(chan struct{}, capturasSimultaneas)
+
+	pegar := func() bool {
+		select {
+		case vagas <- struct{}{}:
+			return true
+		default:
+			return false
+		}
+	}
+
+	for i := 0; i < capturasSimultaneas; i++ {
+		if !pegar() {
+			t.Fatalf("a vaga %d de %d devia estar livre", i+1, capturasSimultaneas)
+		}
+	}
+	if pegar() {
+		t.Fatalf("a captura %d passou do teto de %d", capturasSimultaneas+1, capturasSimultaneas)
+	}
+
+	// Devolvida, a vaga volta a servir — senão o cache se desligaria sozinho com o tempo.
+	<-vagas
+	if !pegar() {
+		t.Fatal("a vaga devolvida não voltou a ser usada")
+	}
+}

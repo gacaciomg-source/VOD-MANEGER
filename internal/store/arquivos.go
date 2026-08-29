@@ -71,6 +71,9 @@ type ArquivoGuardado struct {
 	// alguem ter assistido. Uma aposta pode estar errada, e por isso nao compete em pe de
 	// igualdade com o acervo que ja provou serventia.
 	Adiantado bool `json:"adiantado"`
+	// Tentativas: quantas vezes esta copia ja falhou. A tela usa para distinguir "vai
+	// tentar de novo" de "desistiu" — dois estados que pareciam o mesmo erro vermelho.
+	Tentativas int `json:"tentativas"`
 }
 
 // Descartavel informa se a limpeza automática pode apagar este arquivo.
@@ -88,6 +91,7 @@ var camposArquivo = []string{
 	"id", "variant_id", "target_kind", "target_id", "backend", "nuvem_id", "localizador",
 	"bytes", "bytes_baixados", "bytes_totais", "container_ext", "estado", "erro", "origem",
 	"protegido", "acessos", "ultimo_acesso_em", "criado_em", "concluido_em", "adiantado",
+	"tentativas",
 }
 
 // colunasArquivo serve às consultas de uma tabela só.
@@ -111,12 +115,25 @@ func colunasArquivoDe(apelido string) string {
 	return strings.Join(qualificadas, ", ")
 }
 
-func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
-	var a ArquivoGuardado
-	err := linha.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend, &a.NuvemID,
+// destinosArquivo devolve os ponteiros na MESMA ordem de camposArquivo.
+//
+// Uma função, e não duas listas escritas à mão. A divergência entre elas já quebrou este
+// arquivo duas vezes: acrescentar uma coluna à lista e esquecer o segundo leitor produz
+// "number of field descriptions must equal number of destinations" — e, se as contagens por
+// acaso baterem, algo pior: uma coluna lida na posição errada, em silêncio.
+//
+// Existem dois leitores porque a listagem da tela traz colunas extras da junção. O que eles
+// NÃO podem ter é cada um a sua ideia de quais são os campos do arquivo.
+func destinosArquivo(a *ArquivoGuardado) []any {
+	return []any{&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend, &a.NuvemID,
 		&a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais, &a.ContainerExt,
 		&a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos, &a.UltimoAcesso,
-		&a.CriadoEm, &a.ConcluidoEm, &a.Adiantado)
+		&a.CriadoEm, &a.ConcluidoEm, &a.Adiantado, &a.Tentativas}
+}
+
+func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
+	var a ArquivoGuardado
+	err := linha.Scan(destinosArquivo(&a)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -532,11 +549,10 @@ func (s *Store) ListarArquivos(ctx context.Context, f FiltroDeArquivos) ([]Arqui
 	for rows.Next() {
 		var t ArquivoNaTela
 		a := &t.ArquivoGuardado
-		if err := rows.Scan(&a.ID, &a.VariantID, &a.TargetKind, &a.TargetID, &a.Backend,
-			&a.NuvemID, &a.Localizador, &a.Bytes, &a.BytesBaixados, &a.BytesTotais,
-			&a.ContainerExt, &a.Estado, &a.Erro, &a.Origem, &a.Protegido, &a.Acessos,
-			&a.UltimoAcesso, &a.CriadoEm, &a.ConcluidoEm, &a.Adiantado,
-			&t.Titulo, &t.NuvemNome, &t.FonteNome); err != nil {
+		// Os campos do arquivo vêm da MESMA fonte que o outro leitor; só as colunas
+		// extras da junção são acrescentadas aqui.
+		destinos := append(destinosArquivo(a), &t.Titulo, &t.NuvemNome, &t.FonteNome)
+		if err := rows.Scan(destinos...); err != nil {
 			return nil, wrapErr("listando o acervo", err)
 		}
 		out = append(out, t)

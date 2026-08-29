@@ -3194,7 +3194,7 @@ function linhaDoAcervo(a) {
           ? '<span class="etiqueta alerta" style="margin-left:6px" title="Baixado por antecipação: é o episódio seguinte ao que alguém assistiu. Ninguém abriu ainda.">próxima reprodução</span>'
           : ''}
         ${a.fonte_nome ? `<div class="dica">de ${esc(a.fonte_nome)}</div>` : ''}
-        ${a.erro ? `<div class="dica" style="color:var(--erro)">${esc(a.erro)}</div>` : ''}
+        ${motivoDoArquivo(a)}
       </td>
       <td class="discreto">${onde}</td>
       <td class="numero">
@@ -4909,4 +4909,30 @@ function espacoDaNuvem(n) {
   const pct = Math.round(((n.bytes_usados || 0) / n.bytes_totais) * 100);
   return `<b>${formatarBytes(livre)} livres</b>
     <div class="dica">${formatarBytes(n.bytes_usados || 0)} de ${formatarBytes(n.bytes_totais)} · ${pct}%</div>`;
+}
+
+/**
+ * O motivo da última falha, pintado conforme o sistema já desistiu ou não.
+ *
+ * Antes, qualquer texto de erro saía em vermelho — e isso juntava duas situações opostas:
+ *
+ *   - "falhou e VAI TENTAR DE NOVO", que é o sistema trabalhando e não pede nada de ninguém;
+ *   - "falhou e DESISTIU", que é a única que precisa de decisão humana.
+ *
+ * A lista ficava com dezenas de linhas vermelhas de coisas que iam se resolver sozinhas, e a
+ * conclusão natural — a que o usuário teve — era que estava tudo quebrado. O sinal perdia o
+ * valor justamente por ser dado demais.
+ */
+function motivoDoArquivo(a) {
+  if (!a.erro) return '';
+  if (a.estado === 'erro') {
+    return `<div class="dica" style="color:var(--erro)">${esc(a.erro)}</div>`;
+  }
+  // Ainda na fila: o texto é histórico, não um chamado.
+  const quantas = a.tentativas
+    ? ` <span class="discreto">(tentativa ${a.tentativas + 1})</span>`
+    : '';
+  return `<div class="dica">
+    <b>Vai tentar de novo${quantas}:</b> ${esc(a.erro)}
+  </div>`;
 }
