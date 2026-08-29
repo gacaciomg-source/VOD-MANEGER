@@ -933,3 +933,70 @@ func (s *Store) ReenfileirarArquivo(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// EstimativaDeArmazenamento diz quanto caberia guardar tudo.
+type EstimativaDeArmazenamento struct {
+	SourceID   *int64 `json:"source_id"`
+	Fonte      string `json:"fonte"`
+	Titulos    int64  `json:"titulos"`
+	Amostra    int64  `json:"amostra"`
+	MediaBytes int64  `json:"media_bytes"`
+	TotalBytes int64  `json:"total_bytes"`
+}
+
+// EstimarArmazenamento calcula, por fonte, quanto espaço o catálogo inteiro ocuparia.
+//
+// # De onde vem o número
+//
+// Do que JÁ foi baixado. Cada fonte tem um perfil de qualidade próprio — uma entrega filmes
+// de 800 MB, outra de 4 GB —, e uma média global misturaria os dois e erraria nos dois. Por
+// isso a média é por fonte, calculada sobre as cópias prontas dela.
+//
+// # Por que a amostra importa mais que o total
+//
+// Com três cópias baixadas, a média diz pouco: basta um filme atípico para deslocá-la. Por
+// isso a amostra vai junto na resposta — quem lê precisa saber se está diante de uma
+// estimativa ou de um palpite. Uma tela que mostra "18 TB" sem dizer que isso saiu de quatro
+// arquivos convida a uma decisão de compra sobre nada.
+//
+// Fontes sem nenhuma cópia pronta não aparecem: sem amostra não há estimativa, e inventar uma
+// média global para elas seria dar um número com cara de medição.
+func (s *Store) EstimarArmazenamento(ctx context.Context) ([]EstimativaDeArmazenamento, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH medias AS (
+			SELECT v.source_id, avg(a.bytes)::bigint AS media, count(*) AS amostra
+			FROM arquivos_guardados a
+			JOIN source_variants v ON v.id = a.variant_id
+			WHERE a.estado = 'pronto' AND a.origem = 'fonte' AND a.bytes > 0
+			GROUP BY v.source_id
+		),
+		titulos AS (
+			SELECT source_id, count(*) AS quantos
+			FROM source_variants
+			WHERE enabled AND available
+			GROUP BY source_id
+		)
+		SELECT s.id, s.name,
+		       coalesce(t.quantos, 0), m.amostra, m.media,
+		       (coalesce(t.quantos, 0) * m.media)::bigint
+		FROM medias m
+		JOIN sources s ON s.id = m.source_id
+		LEFT JOIN titulos t ON t.source_id = m.source_id
+		ORDER BY 6 DESC`)
+	if err != nil {
+		return nil, wrapErr("estimando armazenamento", err)
+	}
+	defer rows.Close()
+
+	out := []EstimativaDeArmazenamento{}
+	for rows.Next() {
+		var e EstimativaDeArmazenamento
+		var id int64
+		if err := rows.Scan(&id, &e.Fonte, &e.Titulos, &e.Amostra, &e.MediaBytes, &e.TotalBytes); err != nil {
+			return nil, wrapErr("estimando armazenamento", err)
+		}
+		e.SourceID = &id
+		out = append(out, e)
+	}
+	return out, wrapErr("estimando armazenamento", rows.Err())
+}

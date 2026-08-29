@@ -574,3 +574,20 @@ func TestConcluirRecusaCopiaImplausivel(t *testing.T) {
 		t.Fatalf("o piso não pode alcançar o acervo próprio: %v", err)
 	}
 }
+
+// TestEstimarArmazenamentoExecuta roda a consulta da estimativa contra o Postgres.
+//
+// Ela junta arquivos_guardados, source_variants e sources, e usa CTEs — o tipo de consulta
+// que compila em Go e o Postgres recusa. É a mesma razão dos outros testes deste arquivo: só
+// executar prova.
+func TestEstimarArmazenamentoExecuta(t *testing.T) {
+	env := newTestEnv(t)
+
+	fontes, err := env.Store.EstimarArmazenamento(context.Background())
+	if err != nil {
+		t.Fatalf("EstimarArmazenamento: %v", err)
+	}
+	if fontes == nil {
+		t.Fatal("a estimativa precisa ser uma lista vazia, e nunca nula: a tela itera sobre ela")
+	}
+}

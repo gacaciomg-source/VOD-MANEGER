@@ -152,6 +152,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/system/dominio", s.handleDominioStatus)
 			r.Get("/system/migracao", s.handleMigracaoStatus)
 			r.Get("/falhas", s.handleFalhas)
+			r.Get("/acervo/estimativa", s.handleEstimativaDeArmazenamento)
 			r.Get("/trafego", s.handleTrafego)
 
 			// Acervo: o que esta operação guarda, e onde.

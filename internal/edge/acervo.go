@@ -118,7 +118,15 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 		return true
 	}
 
-	corpo, err := p.acervo.Abrir(r.Context(), arquivo, f.inicio)
+	// O contexto do CORPO é criado antes da abertura, e não depois.
+	//
+	// É ele que o vigia cancela para interromper uma leitura travada — fechar o descritor de
+	// dentro do Read não é possível, e cancelar um contexto que o corpo não usa faria o vigia
+	// marcar a falha sem conseguir soltar nada. A leitura seguiria presa para sempre.
+	ctxCorpo, cancelarCorpo := context.WithCancel(r.Context())
+	defer cancelarCorpo()
+
+	corpo, err := p.abrirComPrazo(ctxCorpo, arquivo, f.inicio)
 	if err != nil {
 		// A cópia sumiu do disco, a conta de nuvem está fora, o token venceu. Nada disso
 		// pode virar erro para o espectador enquanto a fonte existir.
@@ -154,12 +162,28 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	}
 	ttfb := int(time.Since(inicio).Milliseconds())
 
+	// O mesmo vigia da fonte, e pela mesma razão.
+	//
+	// O acervo não é imune a travar: uma conta de nuvem pode aceitar a conexão e parar de
+	// enviar no meio do filme, e um disco com setor ruim faz o mesmo. Sem vigia, a
+	// reprodução ficaria presa para sempre — segurando vaga na credencial e uma tela parada
+	// do outro lado.
+	//
+	// Este caminho ficou sem proteção enquanto o acervo era só disco local, onde travar é
+	// raro. Com as séries arquivadas na nuvem, deixou de ser.
 	destino := &escritorDoCliente{destino: w}
+	vigiado, pararVigia, travou := vigiar(corpo, cancelarCorpo, destino.EsperandoCliente)
+	defer pararVigia()
+
 	buf := make([]byte, bufferCopia)
-	enviados, errCopia := io.CopyBuffer(destino, io.LimitReader(corpo, tamanho), buf)
+	enviados, errCopia := io.CopyBuffer(destino, io.LimitReader(vigiado, tamanho), buf)
 
 	estado, codigoErro := "closed", ""
-	if errCopia != nil && !destino.falhou {
+	if errCopia != nil && travou() {
+		estado, codigoErro = "error", "acervo_parou_no_meio"
+		p.log.Warn("o armazenamento parou de enviar no meio da transmissão",
+			"arquivo_id", arquivo.ID, "onde", arquivo.Backend, "bytes", enviados)
+	} else if errCopia != nil && !destino.falhou {
 		// Falha LENDO do acervo, não escrevendo para o cliente. Vale registrar: um disco
 		// com setor ruim ou uma nuvem instável aparecem aqui antes de aparecerem em
 		// qualquer outro lugar.
@@ -237,4 +261,59 @@ func (p *Proxy) adiantarProximoEpisodio(r *http.Request, ped pedido) {
 	ctx := context.WithoutCancel(r.Context())
 	alvo := ped.alvo
 	go p.acervo.TalvezAdiantarProximo(ctx, alvo)
+}
+
+// prazoParaAbrirOAcervo é quanto se espera pelo armazenamento antes de desistir dele.
+//
+// Dez segundos. O acervo existe para ser MAIS rápido que a fonte — se ele demora mais que
+// isso, já perdeu a razão de ser, e insistir só transfere a lentidão para o espectador.
+//
+// O número não é sobre o disco, que responde em microssegundos: é sobre a nuvem. O cliente
+// do Drive espera até sessenta segundos por um cabeçalho, e sessenta segundos de tela parada
+// é indistinguível de "não abre" — foi assim que as séries, que estão quase todas
+// arquivadas, pararam de abrir enquanto os filmes em disco continuavam normais.
+const prazoParaAbrirOAcervo = 10 * time.Second
+
+// abrirComPrazo pede os bytes ao armazenamento, desistindo se ele demorar.
+//
+// # Por que numa rotina separada, e não com um contexto de prazo
+//
+// Um contexto com prazo passado ao `Abrir` governaria também a LEITURA do corpo — e o corpo
+// é um filme inteiro, que leva muito mais que dez segundos para ser lido. O prazo mataria a
+// reprodução no meio.
+//
+// Então o prazo vale só para a ABERTURA. Se ela chegar tarde, ninguém mais a espera e o
+// corpo é fechado quando enfim aparecer — o que evita deixar uma conexão pendurada com o
+// provedor a cada abertura lenta.
+func (p *Proxy) abrirComPrazo(ctx context.Context, arquivo *store.ArquivoGuardado,
+	deslocamento int64) (io.ReadCloser, error) {
+
+	type resultado struct {
+		corpo io.ReadCloser
+		err   error
+	}
+	pronto := make(chan resultado, 1)
+	go func() {
+		corpo, err := p.acervo.Abrir(ctx, arquivo, deslocamento)
+		pronto <- resultado{corpo, err}
+	}()
+
+	select {
+	case r := <-pronto:
+		return r.corpo, r.err
+	case <-time.After(prazoParaAbrirOAcervo):
+		go func() {
+			if r := <-pronto; r.corpo != nil {
+				r.corpo.Close()
+			}
+		}()
+		return nil, fmt.Errorf("o armazenamento não respondeu em %s", prazoParaAbrirOAcervo)
+	case <-ctx.Done():
+		go func() {
+			if r := <-pronto; r.corpo != nil {
+				r.corpo.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	}
 }

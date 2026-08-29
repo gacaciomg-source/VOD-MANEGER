@@ -345,9 +345,12 @@ async function atualizarSeloNaoResolvidos() {
 // ---------------------------------------------------------------------------
 
 async function verPainel() {
-  const [d, orfaos] = await Promise.all([
+  const [d, orfaos, estimativa] = await Promise.all([
     api('/stats/dashboard'),
     api('/maintenance/orphan-contents').catch(() => null),
+    // Informativo: se falhar, o painel abre igual. Uma estimativa não pode derrubar a tela
+    // que responde "o sistema está de pé?".
+    api('/acervo/estimativa').catch(() => null),
   ]);
   const c = d.catalog;
   const totalOrfaos = orfaos ? orfaos.movies + orfaos.series : 0;
@@ -387,6 +390,8 @@ async function verPainel() {
       ${metrica(c.unavailable_variants, 'Indisponíveis', true)}
       ${metrica(c.unresolved_items, 'Não resolvidos', true)}
     </div>
+
+    ${cartaoDeEstimativa(estimativa)}
 
     ${totalOrfaos > 0 ? `
       <div class="cartao" style="border-color:#4a3a12">
