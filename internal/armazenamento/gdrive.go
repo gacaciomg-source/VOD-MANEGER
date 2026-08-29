@@ -379,7 +379,18 @@ func (g *GDrive) Abrir(ctx context.Context, localizador string, deslocamento int
 		resp.Body.Close()
 		return nil, fmt.Errorf("a conta %q respondeu %s à leitura", g.nome, resp.Status)
 	}
-	return resp.Body, nil
+
+	// Pedimos do byte N e viemos do zero.
+	//
+	// Um 200 em resposta a um pedido com Range significa que a faixa foi IGNORADA: o corpo
+	// começa no início do arquivo. Devolvê-lo assim entrega ao player o começo do filme
+	// quando ele pediu a continuação — e, como o player confia no que pediu, ele volta ao
+	// início. É o mesmo defeito que já corrigimos nas fontes, e que voltou por este caminho:
+	// o acervo na nuvem, que não tinha essa proteção.
+	//
+	// Descartar os primeiros N bytes custa uma leitura, e é o que resta a fazer: não há como
+	// obrigar o outro lado a respeitar a faixa, e servir do lugar errado é pior que esperar.
+	return posicionarSeIgnorouAFaixa(resp.Body, resp.StatusCode, deslocamento, g.nome)
 }
 
 // Apagar remove o arquivo. Apagar o que não existe não é erro.
@@ -552,4 +563,33 @@ func (g *GDrive) GarantirPasta(ctx context.Context, nome string) (string, error)
 		return "", fmt.Errorf("resposta inesperada ao criar a pasta na conta %q", g.nome)
 	}
 	return nova.ID, nil
+}
+
+// posicionarSeIgnorouAFaixa conserta um corpo que veio do começo quando pedimos do meio.
+//
+// Um 200 em resposta a um pedido com Range significa que a faixa foi IGNORADA: o corpo começa
+// no início do arquivo. Devolvê-lo assim entrega ao player o começo do filme quando ele pediu
+// a continuação — e, como o player confia no que pediu, ele volta ao início e trava sempre no
+// mesmo ponto.
+//
+// É o mesmo defeito que já foi corrigido nas fontes, e que voltou por este caminho: o acervo
+// na nuvem, que não tinha essa proteção.
+//
+// Descartar os primeiros bytes custa uma leitura, e é o que resta a fazer: não há como
+// obrigar o outro lado a respeitar a faixa, e servir do lugar errado é pior que esperar.
+//
+// Função separada para poder ser testada: a decisão é curta e o custo de errar é um filme que
+// não passa do meio.
+func posicionarSeIgnorouAFaixa(corpo io.ReadCloser, status int, deslocamento int64,
+	conta string) (io.ReadCloser, error) {
+
+	if deslocamento <= 0 || status != http.StatusOK {
+		return corpo, nil
+	}
+	if _, err := io.CopyN(io.Discard, corpo, deslocamento); err != nil {
+		corpo.Close()
+		return nil, fmt.Errorf("a conta %q ignorou a faixa pedida e o arquivo acabou antes "+
+			"do byte %d", conta, deslocamento)
+	}
+	return corpo, nil
 }
