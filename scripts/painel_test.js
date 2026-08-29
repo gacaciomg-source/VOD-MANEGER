@@ -137,6 +137,50 @@ console.log('\nPainel — app.js');
   }
 }
 
+// ---------------------------------------------------------------------------
+// Função chamada dentro de template e nunca definida.
+//
+// Uma tela inteira cai com "X is not defined", e nada antes disso avisa: o arquivo tem
+// sintaxe válida, o build passa, e o erro só aparece quando alguém abre aquela tela.
+//
+// Aconteceu de verdade, e mais de uma vez, sempre do mesmo jeito: a chamada foi inserida por
+// uma edição e a definição por outra, e a segunda não aplicou. O painel foi para produção
+// chamando uma função que não existia.
+//
+// Só as chamadas dentro de `${...}` são verificadas — são as que montam HTML, e portanto as
+// que derrubam a tela inteira quando faltam.
+{
+  const definidas = new Set();
+  for (const m of codigo.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)) definidas.add(m[1]);
+  // Três formas de definir, e a terceira é a que faltava: `const f = x => ...`, com um
+  // parâmetro só e sem parênteses. Sem ela a verificação acusava funções que existiam — e um
+  // teste que grita por engano é abandonado, o que o torna pior que não existir.
+  const definicao = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\(|function|[A-Za-z_$][\w$]*\s*=>)/g;
+  for (const m of codigo.matchAll(definicao)) definidas.add(m[1]);
+  // Nomes que vêm do navegador, e não deste arquivo.
+  const doNavegador = new Set(['String', 'Number', 'Boolean', 'Array', 'Object', 'Date',
+    'Math', 'JSON', 'parseInt', 'parseFloat', 'isNaN', 'encodeURIComponent', 'decodeURIComponent',
+    'setTimeout', 'clearTimeout', 'setInterval', 'fetch', 'alert', 'confirm', 'prompt']);
+
+  const faltando = new Map();
+  for (const m of codigo.matchAll(/\$\{\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+    const nome = m[1];
+    if (definidas.has(nome) || doNavegador.has(nome)) continue;
+    if (!faltando.has(nome)) {
+      const linha = codigo.slice(0, m.index).split('\n').length;
+      faltando.set(nome, linha);
+    }
+  }
+
+  if (faltando.size === 0) {
+    ok('toda função chamada dentro de template está definida');
+  } else {
+    for (const [nome, linha] of faltando) {
+      falha(`${linha}: ${nome}() é chamada e não existe — a tela cai inteira ao abrir`);
+    }
+  }
+}
+
 console.log();
 if (falhas === 0) {
   console.log('\x1b[32mTodas as verificações passaram.\x1b[0m\n');

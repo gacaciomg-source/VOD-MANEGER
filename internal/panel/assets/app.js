@@ -4941,3 +4941,54 @@ function motivoDoArquivo(a) {
     <b>Vai tentar de novo${quantas}:</b> ${esc(a.erro)}
   </div>`;
 }
+
+/**
+ * Quanto caberia guardar tudo, por fonte.
+ *
+ * O número sai do que JÁ foi baixado de cada fonte, e não de uma média geral. Cada fonte tem
+ * um perfil de qualidade próprio — uma entrega filmes de 800 MB, outra de 4 GB —, e uma média
+ * única erraria nas duas.
+ *
+ * A AMOSTRA aparece junto, e é a parte que mais importa. Com quatro arquivos baixados, "18 TB"
+ * não é uma estimativa: é uma extrapolação de quatro pontos, e mostrar só o total convidaria
+ * a uma decisão de compra sobre nada. Quem lê precisa poder desconfiar do número.
+ */
+function cartaoDeEstimativa(e) {
+  if (!e || !Array.isArray(e.fontes) || !e.fontes.length) return '';
+
+  const linha = f => `
+    <tr>
+      <td><b>${esc(f.fonte)}</b>
+        ${f.amostra >= 20 ? '' :
+          `<div class="dica" style="color:var(--alerta)">
+             estimativa fraca: só ${num(f.amostra)} arquivo(s) baixado(s)</div>`}</td>
+      <td class="numero">${num(f.titulos)}</td>
+      <td class="numero">${formatarBytes(f.media_bytes)}</td>
+      <td class="numero"><b>${formatarBytes(f.total_bytes)}</b></td>
+    </tr>`;
+
+  return `
+    <div class="secao-titulo">Quanto caberia guardar tudo</div>
+    <div class="cartao">
+      <p class="discreto" style="margin:0 0 12px">
+        Estimativa a partir do tamanho médio do que já foi baixado de cada fonte — e não de
+        uma média geral, porque cada fonte entrega em qualidade diferente.
+        <br>
+        Quanto mais arquivos baixados, mais firme o número. Abaixo de vinte, trate como ordem
+        de grandeza.
+      </p>
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Fonte</th><th class="numero">Títulos</th>
+          <th class="numero">Média por título</th><th class="numero">Precisaria de</th>
+        </tr></thead>
+        <tbody>${e.fontes.map(linha).join('')}</tbody>
+        <tfoot><tr>
+          <td><b>Todas as fontes</b></td>
+          <td class="numero">${num(e.titulos)}</td>
+          <td></td>
+          <td class="numero"><b>${formatarBytes(e.total_bytes)}</b></td>
+        </tr></tfoot>
+      </table></div>
+    </div>`;
+}
