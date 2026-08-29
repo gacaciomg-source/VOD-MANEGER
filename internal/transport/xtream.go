@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,6 +189,11 @@ func (p *XtreamProvider) Probe(ctx context.Context, cfg sources.Config) error {
 			Auth    json.RawMessage `json:"auth"`
 			Status  string          `json:"status"`
 			Message string          `json:"message"`
+			// ExpDate é a informação que faltava: a fonte SEMPRE a envia, e ninguém a lia.
+			//
+			// Vem como texto com um timestamp unix, às vezes número, às vezes vazia ou nula
+			// — daí o RawMessage. Uma conta sem vencimento manda vazio, e isso é legítimo.
+			ExpDate json.RawMessage `json:"exp_date"`
 		} `json:"user_info"`
 	}
 	if err := json.Unmarshal(dados, &resposta); err != nil {
@@ -203,6 +209,20 @@ func (p *XtreamProvider) Probe(ctx context.Context, cfg sources.Config) error {
 	}
 	if st := strings.ToLower(resposta.UserInfo.Status); st != "" && st != "active" {
 		return fmt.Errorf("xtream: a conta na fonte está com status %q", resposta.UserInfo.Status)
+	}
+
+	// O vencimento, que era a informação que faltava.
+	//
+	// Uma fonte vencida NÃO para de responder: ela aceita a conexão, devolve 200 e entrega,
+	// no lugar de cada filme, mil e seiscentos bytes com a frase "sua lista está expirada".
+	// Para o sistema tudo parecia normal; para quem assistia, todo conteúdo dela abria com
+	// zero segundos, sem nada nos registros apontando a causa.
+	//
+	// Vazio é legítimo: contas sem prazo existem, e exigir a data recusaria fontes boas.
+	if venc, ok := vencimentoXtream(resposta.UserInfo.ExpDate); ok && time.Now().After(venc) {
+		return fmt.Errorf("xtream: a assinatura nesta fonte venceu em %s — "+
+			"ela continua respondendo, mas entrega um aviso no lugar dos vídeos",
+			venc.Format("02/01/2006"))
 	}
 	return nil
 }
@@ -257,4 +277,26 @@ func primeiroNaoVazio(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// vencimentoXtream interpreta o exp_date, que vem em três formatos diferentes.
+//
+// Texto com número (`"1735689600"`), número puro (`1735689600`), ou vazio/nulo. A variação
+// não é descuido de um painel só: cada implementação de Xtream escolheu a sua, e um cliente
+// que aceite apenas uma recusa metade das fontes do mercado.
+//
+// O segundo retorno é "havia data", e não "deu certo": ausência é o caso legítimo de uma
+// conta sem prazo, e tratá-la como erro faria fontes boas parecerem vencidas.
+func vencimentoXtream(bruto json.RawMessage) (time.Time, bool) {
+	// Os espacos sao aparados DEPOIS das aspas tambem: " 1735689600 " tem espaco por
+	// dentro delas, e aparar so por fora deixaria o numero incolavel.
+	texto := strings.TrimSpace(strings.Trim(strings.TrimSpace(string(bruto)), `"`))
+	if texto == "" || texto == "null" || texto == "0" {
+		return time.Time{}, false
+	}
+	segundos, err := strconv.ParseInt(texto, 10, 64)
+	if err != nil || segundos <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(segundos, 0), true
 }

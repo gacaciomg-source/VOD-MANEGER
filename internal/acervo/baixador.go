@@ -39,13 +39,29 @@ import (
 // acervo que se enche em uma semana sem ninguém perceber é melhor que um que se enche numa
 // noite derrubando todo mundo.
 
-// trabalhadores é quantas cópias acontecem ao mesmo tempo.
+// trabalhadores é quantas cópias acontecem ao mesmo tempo, no total.
 //
-// Dois, e não dez. Cada cópia é uma conexão a mais na fonte — e a fonte é o recurso mais
-// escasso e o mais fácil de irritar. Duas cópias somadas ao tráfego dos espectadores ainda
-// cabem na conta de qualquer fonte; dez fariam a fonte cortar o acesso, e aí o prejuízo não
-// seria só do cache.
-const trabalhadores = 2
+// Seis, e não dois. Dois era conservador demais: com uma fila de centenas de títulos, duas
+// cópias por vez levam semanas, e o cache nunca alcança o catálogo.
+//
+// O que impedia subir não era a máquina — é a FONTE, que corta o acesso de quem abre conexões
+// demais. Mas esse limite é por fonte, e não global: com quatro fontes cadastradas, seis
+// cópias distribuídas entre elas não pesam mais que as duas de antes pesavam numa só.
+//
+// Por isso o teto de verdade é o de baixo, por fonte. Este aqui só limita o custo total de
+// memória e banda da máquina.
+const trabalhadores = 6
+
+// copiasPorFonte é quantas cópias simultâneas cabem NA MESMA fonte.
+//
+// A fonte é o recurso escasso, e o limite dela é compartilhado com os espectadores: cada
+// cópia ocupa uma conexão que alguém poderia estar usando para assistir. Duas por fonte deixa
+// folga para a audiência e ainda multiplica a fila por quantas fontes existirem.
+//
+// Quando a fonte declara o próprio limite de conexões, ele manda — nunca usamos mais que
+// METADE dele, porque a outra metade é de quem está assistindo, e irritar a fonte prejudica
+// os dois.
+const copiasPorFonte = 2
 
 // intervaloDaFila é quanto se espera antes de olhar a fila de novo, quando ela está vazia.
 //
@@ -93,14 +109,18 @@ type Baixador struct {
 	// medidoEm marca a ultima medicao das contas de nuvem. Tocado so pelo trabalhador 1,
 	// que e o unico que mede — por isso nao precisa de trava.
 	medidoEm time.Time
+
+	// porFonte impede que varios trabalhadores caiam todos na mesma fonte.
+	porFonte *vagasDaFonte
 }
 
 // NovoBaixador cria o módulo.
 func NovoBaixador(s *Servico, st *store.Store, r Resolvedor, log *slog.Logger) *Baixador {
 	return &Baixador{
 		servico: s, store: st, resolvedor: r, log: log,
-		parar: make(chan struct{}),
-		errCh: make(chan error, 1),
+		parar:    make(chan struct{}),
+		errCh:    make(chan error, 1),
+		porFonte: novasVagasDaFonte(),
 		http: &http.Client{
 			// SEM prazo total: uma cópia de 40 GB leva horas. O que protege é o prazo para a
 			// fonte RESPONDER, não para a transferência terminar.
@@ -261,7 +281,8 @@ func (b *Baixador) umaCopia(ctx context.Context, numero int) bool {
 		//
 		// Não há risco de laço apertado: a fila só é consultada a cada 30 segundos, e a
 		// limpeza roda antes das cópias no mesmo trabalhador.
-		if errors.Is(err, context.Canceled) || errors.Is(err, armazenamento.ErrSemEspaco) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, armazenamento.ErrSemEspaco) ||
+			errors.Is(err, ErrFontesOcupadas) {
 			if e := b.store.DevolverAFila(context.Background(), arquivo.ID); e != nil {
 				b.log.Warn("falha ao devolver a cópia à fila", "arquivo_id", arquivo.ID, "erro", e)
 			}
@@ -306,7 +327,16 @@ func (b *Baixador) copiar(ctx context.Context, arquivo *store.ArquivoGuardado) e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// A vaga da fonte é pedida aqui, e não no laço externo: cada origem é de uma fonte
+		// diferente, e uma que está cheia não impede tentar a próxima.
+		soltar, ok := b.porFonte.pegar(origens[i].SourceID, origens[i].MaxConns)
+		if !ok {
+			// Fonte no limite. Não é falha: outro trabalhador está copiando dela agora, e
+			// insistir só abriria a conexão a mais que o limite existe para evitar.
+			continue
+		}
 		err := b.copiarDe(ctx, arquivo, &origens[i])
+		soltar()
 		if err == nil {
 			return nil
 		}
@@ -322,7 +352,10 @@ func (b *Baixador) copiar(ctx context.Context, arquivo *store.ArquivoGuardado) e
 		}
 	}
 	if ultimoErro == nil {
-		return errors.New("nenhuma origem disponível para esta cópia")
+		// Nenhuma origem foi sequer tentada: todas as fontes estão no limite neste
+		// instante. Isso não é falha da cópia — é fila —, e marcá-la com erro gastaria uma
+		// das três tentativas por algo que não tem a ver com ela.
+		return ErrFontesOcupadas
 	}
 	return ultimoErro
 }
@@ -593,3 +626,63 @@ func lerContentRange(cabecalho string) (inicio, total int64) {
 	}
 	return inicio, total
 }
+
+// vagasDaFonte controla quantas cópias simultâneas cabem em cada fonte.
+//
+// # Por que por fonte, e não um número só
+//
+// O gargalo do download nunca foi a máquina: é a fonte, que corta o acesso de quem abre
+// conexões demais. Mas esse limite pertence a CADA fonte — quatro cópias em quatro fontes
+// diferentes não pesam mais, para nenhuma delas, do que uma cópia em uma só.
+//
+// Um teto global tratava as quatro como se fossem uma, e por isso a fila andava no ritmo da
+// fonte mais lenta enquanto as outras ficavam ociosas.
+type vagasDaFonte struct {
+	mu     sync.Mutex
+	limite map[int64]chan struct{}
+}
+
+func novasVagasDaFonte() *vagasDaFonte {
+	return &vagasDaFonte{limite: map[int64]chan struct{}{}}
+}
+
+// pegar reserva uma vaga na fonte. Devolve false quando ela já está no limite.
+//
+// `maxConns` é o limite que a fonte declara. Usamos no máximo METADE dele: a outra metade é
+// dos espectadores, e uma fonte irritada corta os dois.
+func (v *vagasDaFonte) pegar(sourceID int64, maxConns int) (func(), bool) {
+	v.mu.Lock()
+	vagas, ok := v.limite[sourceID]
+	if !ok {
+		teto := copiasPorFonte
+		if maxConns > 0 {
+			metade := maxConns / 2
+			if metade < 1 {
+				// Uma fonte que só aceita uma conexão nunca poderia ser copiada se
+				// exigíssemos metade. Uma cópia por vez ainda funciona — devagar, que é o
+				// ritmo que essa fonte permite.
+				metade = 1
+			}
+			if metade < teto {
+				teto = metade
+			}
+		}
+		vagas = make(chan struct{}, teto)
+		v.limite[sourceID] = vagas
+	}
+	v.mu.Unlock()
+
+	select {
+	case vagas <- struct{}{}:
+		return func() { <-vagas }, true
+	default:
+		return nil, false
+	}
+}
+
+// ErrFontesOcupadas: todas as fontes desta cópia estão no limite de conexões agora.
+//
+// Não é falha, é fila. Quem trata devolve a cópia ao estado pendente em vez de contar uma
+// tentativa — o contrário gastaria as três tentativas do arquivo por causa de concorrência
+// momentânea, e o título viraria erro permanente sem nunca ter sido de fato tentado.
+var ErrFontesOcupadas = errors.New("todas as origens estão no limite de conexões")
