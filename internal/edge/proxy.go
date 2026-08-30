@@ -159,7 +159,7 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		}
 	}
 
-	streamID, err := p.abrirSessao(r, ped)
+	streamID, err := p.abrirSessao(r, ped, "")
 	if err != nil {
 		p.log.Warn("não foi possível registrar a sessão", "erro", err)
 	}
@@ -311,6 +311,23 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	var saida io.Writer = destino
 	if captura != nil {
 		saida = io.MultiWriter(destino, captura)
+
+		// "baixando e servindo" na tela: a fonte alimenta o espectador e o acervo na mesma
+		// descida. Distinguir isso de uma passagem comum é o que mostra que a próxima
+		// reprodução deste filme já vai sair do disco.
+		//
+		// Numa rotina própria, e não aqui: é um rótulo de tela, e a decisão de capturar só
+		// se conhece DEPOIS de a sessão já ter sido aberta. Fazer o espectador esperar uma
+		// segunda escrita no banco por causa disso seria pagar caro por informação nenhuma.
+		if streamID > 0 {
+			go func(id int64) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := p.store.MarcarResultadoDoCache(ctx, id, "miss"); err != nil {
+					p.log.Warn("falha ao marcar a captura na sessão", "stream_id", id, "erro", err)
+				}
+			}(streamID)
+		}
 	}
 
 	buf := make([]byte, bufferCopia)
@@ -466,13 +483,14 @@ func copiarCabecalhos(destino, origem http.Header) {
 	}
 }
 
-func (p *Proxy) abrirSessao(r *http.Request, ped pedido) (int64, error) {
+func (p *Proxy) abrirSessao(r *http.Request, ped pedido, resultado string) (int64, error) {
 	nova := store.NewStream{
 		NodeID:       p.nodeID,
 		CredentialID: ped.credID,
 		ClientIP:     ped.clientIP,
 		UserAgent:    r.UserAgent(),
 		RangeHeader:  r.Header.Get("Range"),
+		CacheResult:  resultado,
 	}
 	if ped.alvo.Kind == store.TargetEpisode {
 		nova.EpisodeID = ped.alvo.EpisodeID

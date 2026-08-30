@@ -780,3 +780,100 @@ func TestUmaVariantePorFonte(t *testing.T) {
 		t.Fatalf("a origem devia ser da fonte cadastrada; veio %d", variantes[0].SourceID)
 	}
 }
+
+// TestSessaoNasceComOResultadoDoCache prende a economia de uma ida ao banco.
+//
+// Eram duas escritas na MESMA linha, uma atrás da outra, no caminho do primeiro byte: o
+// INSERT da sessão e um UPDATE logo depois só para dizer de onde o vídeo saiu. Servindo do
+// disco isso pesava — a leitura do arquivo custa microssegundos, e cada escrita no banco
+// custa milissegundos.
+//
+// Vazio continua virando 'passthrough', que é o padrão da coluna: uma sessão que não sabe de
+// onde saiu não pode nascer mentindo que saiu do cache.
+func TestSessaoNasceComOResultadoDoCache(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	abrir := func(resultado string) string {
+		id, err := env.Store.OpenStream(ctx, store.NewStream{
+			NodeID: "teste", ClientIP: "127.0.0.1", CacheResult: resultado,
+		})
+		if err != nil {
+			t.Fatalf("OpenStream(%q): %v", resultado, err)
+		}
+		var lido string
+		if err := env.Pool.QueryRow(ctx,
+			`SELECT cache_result FROM streams WHERE id = $1`, id).Scan(&lido); err != nil {
+			t.Fatalf("lendo cache_result: %v", err)
+		}
+		return lido
+	}
+
+	if got := abrir("hit"); got != "hit" {
+		t.Fatalf("a sessão devia nascer como 'hit'; veio %q", got)
+	}
+	if got := abrir(""); got != "passthrough" {
+		t.Fatalf("sem resultado, o padrão é 'passthrough'; veio %q", got)
+	}
+}
+
+// TestPrioridadeDaFonteERespeitada responde a uma desconfiança específica: "a turbo é usada
+// mais que a love, mesmo com prioridade pior".
+//
+// A ordem de reprodução é: escolha manual do administrador, depois prioridade da fonte,
+// depois a mais antiga. Este teste prova a segunda parte — e o cuidado está em criar a fonte
+// de PIOR prioridade primeiro, com id menor: se a consulta estivesse ordenando por id, ela
+// passaria por acidente e o teste não valeria nada.
+func TestPrioridadeDaFonteERespeitada(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	criarFonte := func(nome string, prioridade int) int64 {
+		var id int64
+		if err := env.Pool.QueryRow(ctx, `
+			INSERT INTO sources (name, kind, base_url, priority, enabled)
+			VALUES ($1, 'm3u', 'http://exemplo.tld', $2, true) RETURNING id`,
+			nome, prioridade).Scan(&id); err != nil {
+			t.Fatalf("criando a fonte %s: %v", nome, err)
+		}
+		return id
+	}
+
+	// A pior primeiro, de propósito: id menor, prioridade maior (pior).
+	turbo := criarFonte("turbo", 9)
+	love := criarFonte("love", 1)
+
+	filme, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Prioridade", NormalizedTitle: "prioridade",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	for _, f := range []struct {
+		id   int64
+		nome string
+	}{{turbo, "turbo"}, {love, "love"}} {
+		if _, err := env.Store.CreateVariant(ctx, store.NewVariant{
+			SourceID: f.id, TargetKind: "content", TargetID: filme.ID,
+			ExternalID: "prio-" + f.nome, OriginURL: "http://exemplo.tld/" + f.nome,
+			ContainerExt: "mp4",
+		}); err != nil {
+			t.Fatalf("CreateVariant(%s): %v", f.nome, err)
+		}
+	}
+
+	_, variantes, err := env.Store.ResolveContentForStream(ctx, filme.ID)
+	if err != nil {
+		t.Fatalf("ResolveContentForStream: %v", err)
+	}
+	if len(variantes) != 2 {
+		t.Fatalf("duas fontes, duas origens; vieram %d", len(variantes))
+	}
+	if variantes[0].SourceID != love {
+		t.Fatalf("a fonte de melhor prioridade devia vir primeiro; veio %q",
+			variantes[0].SourceName)
+	}
+	if variantes[1].SourceID != turbo {
+		t.Fatalf("a de pior prioridade devia vir depois; veio %q", variantes[1].SourceName)
+	}
+}

@@ -173,6 +173,11 @@ type NewStream struct {
 	ClientIP     string
 	UserAgent    string
 	RangeHeader  string
+	// CacheResult ja na abertura: "hit", "miss" ou vazio (que vira "passthrough").
+	//
+	// Era um UPDATE separado logo depois do INSERT — duas idas ao banco no caminho do
+	// primeiro byte para gravar dois campos da mesma linha.
+	CacheResult  string
 }
 
 // OpenStream registra o início de uma reprodução.
@@ -180,11 +185,12 @@ func (s *Store) OpenStream(ctx context.Context, in NewStream) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO streams (node_id, content_id, episode_id, variant_id, source_id,
-			credential_id, client_ip, user_agent, range_header)
-		VALUES ($1,$2,$3,$4,$5,$6,coalesce($7,''),coalesce($8,''),coalesce($9,''))
+			credential_id, client_ip, user_agent, range_header, cache_result)
+		VALUES ($1,$2,$3,$4,$5,$6,coalesce($7,''),coalesce($8,''),coalesce($9,''),
+		        coalesce(nullif($10,''),'passthrough'))
 		RETURNING id`,
 		in.NodeID, in.ContentID, in.EpisodeID, in.VariantID, in.SourceID,
-		in.CredentialID, in.ClientIP, in.UserAgent, in.RangeHeader).Scan(&id)
+		in.CredentialID, in.ClientIP, in.UserAgent, in.RangeHeader, in.CacheResult).Scan(&id)
 	return id, wrapErr("abrindo sessão de stream", err)
 }
 

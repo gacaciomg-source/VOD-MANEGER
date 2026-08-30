@@ -156,14 +156,22 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 	}
 	w.WriteHeader(status)
 
-	streamID, err := p.abrirSessao(r, ped)
-	if err != nil {
-		p.log.Warn("não foi possível registrar a sessão", "erro", err)
-	} else if err := p.store.MarcarResultadoDoCache(r.Context(), streamID, "hit"); err != nil {
-		// Só o rótulo da tela depende disto. Falhar aqui não pode interromper uma
-		// reprodução que já está saindo perfeitamente do disco.
-		p.log.Warn("falha ao marcar a entrega como cache", "stream_id", streamID, "erro", err)
-	}
+	// A sessão é aberta EM PARALELO com a entrega, e não antes dela.
+	//
+	// Registrar a reprodução é contabilidade nossa: o espectador não tem por que esperar um
+	// INSERT para o vídeo começar. Servindo do disco, essa espera era uma fração grande do
+	// total — a leitura do arquivo custa microssegundos, e a escrita no banco, milissegundos.
+	//
+	// O id é colhido no fim, quando a sessão precisa ser fechada. Até lá, ninguém precisa
+	// dele, e a gravação teve a transmissão inteira para acontecer.
+	sessao := make(chan int64, 1)
+	go func() {
+		id, err := p.abrirSessao(r, ped, "hit")
+		if err != nil {
+			p.log.Warn("não foi possível registrar a sessão", "erro", err)
+		}
+		sessao <- id
+	}()
 	ttfb := int(time.Since(inicio).Milliseconds())
 
 	// O mesmo vigia da fonte, e pela mesma razão.
@@ -198,7 +206,7 @@ func (p *Proxy) servirDoAcervo(w http.ResponseWriter, r *http.Request, ped pedid
 		codigoErro = "cliente_desconectou"
 	}
 
-	p.fecharSessao(streamID, enviados, ttfb, status, estado, codigoErro, 0, arquivo.VariantID)
+	p.fecharSessao(<-sessao, enviados, ttfb, status, estado, codigoErro, 0, arquivo.VariantID)
 	p.contabilidade.Registrar(ped.credID, enviados)
 	p.acervo.RegistrarAcesso(r.Context(), arquivo.ID)
 
