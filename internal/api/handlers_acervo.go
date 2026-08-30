@@ -44,14 +44,25 @@ func (s *Server) handleAcervoResumo(w http.ResponseWriter, r *http.Request) {
 	ligado, _ := s.deps.Store.GetSetting(r.Context(), store.SettingCacheLigado, "")
 	destino, _ := s.deps.Store.GetSetting(r.Context(), store.SettingCacheBackend, store.BackendLocal)
 
+	// Quanto cada origem levaria embora, para a confirmação poder dizer números.
+	apagaria := map[string]any{}
+	for _, origem := range []string{store.OrigemFonte, store.OrigemProprio} {
+		if n, bytes, err := s.deps.Store.ResumoParaApagar(r.Context(), origem); err == nil {
+			apagaria[origem] = map[string]any{"arquivos": n, "bytes": bytes}
+		}
+	}
+
 	corpo := map[string]any{
 		"resumo": resumo,
 		"nuvens": nuvens,
 		// As categorias vao junto porque o formulario de envio precisa delas: uma
 		// segunda requisicao so para preencher um seletor faria a tela abrir em duas
 		// etapas visiveis.
-		"categorias":    categorias,
-		"cache_ligado":  ligado == "true",
+		"categorias":   categorias,
+		"cache_ligado": ligado == "true",
+		// Quanto cada aba levaria embora, para a confirmacao poder dizer numeros em vez de
+		// "tem certeza?". "Tem certeza" nao informa nada; "182 arquivos, 81 GB" informa.
+		"apagaria":      apagaria,
 		"cache_destino": destino,
 	}
 
@@ -264,4 +275,43 @@ func (s *Server) handleEstimativaDeArmazenamento(w http.ResponseWriter, r *http.
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"fontes": fontes, "total_bytes": total, "titulos": titulos,
 	})
+}
+
+type esvaziarAcervoRequest struct {
+	// Origem é obrigatória e sem padrão: "fonte" ou "proprio".
+	//
+	// Sem padrão de propósito. Um valor implícito aqui significaria que um corpo malformado
+	// apagaria alguma coisa — e a coisa apagada seria escolhida por omissão.
+	Origem string `json:"origem"`
+}
+
+// handleEsvaziarAcervo manda para a remoção tudo de uma origem.
+//
+// O acervo próprio exige ser pedido pelo nome, e nunca sai junto com o cache: ele não existe
+// em lugar nenhum além desta instalação, e apagá-lo é perda definitiva. O cache tem o
+// original na fonte, e apagá-lo custa uma releitura.
+func (s *Server) handleEsvaziarAcervo(w http.ResponseWriter, r *http.Request) {
+	var req esvaziarAcervoRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body", "corpo inválido: "+err.Error())
+		return
+	}
+	if req.Origem != store.OrigemFonte && req.Origem != store.OrigemProprio {
+		writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+			"informe a origem: 'fonte' para o cache, 'proprio' para o que você enviou", "origem")
+		return
+	}
+
+	n, err := s.deps.Store.EsvaziarAcervo(r.Context(), req.Origem)
+	if err != nil {
+		s.fail(w, r, err, "esvaziando o acervo")
+		return
+	}
+
+	// Evento, e não só resposta: apagar tudo é a operação mais destrutiva do painel, e
+	// daqui a um mês a pergunta "quem apagou o acervo, e quando?" precisa ter resposta.
+	s.logEvent(r, "acervo", "warn",
+		"acervo esvaziado ("+req.Origem+"): "+strconv.FormatInt(n, 10)+" arquivo(s)",
+		actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"removidos": n})
 }

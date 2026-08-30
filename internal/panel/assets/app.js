@@ -3109,6 +3109,13 @@ async function verAcervo() {
     <div class="secao-titulo">Arquivos guardados</div>
     <div class="grupo-botoes" style="justify-content:flex-start;margin:0 0 10px">
       <button class="btn btn-primario" id="acervo-enviar">Enviar arquivo</button>
+      ${(() => {
+        const alvo = (resumo.apagaria || {})[estadoAcervo.aba];
+        if (!alvo || !alvo.arquivos) return '';
+        return `<button class="btn btn-perigo" id="acervo-apagar-tudo"
+                        data-arquivos="${alvo.arquivos}" data-bytes="${alvo.bytes}">
+                  Apagar tudo (${num(alvo.arquivos)})</button>`;
+      })()}
       <button class="btn" id="acervo-limpar-invalidas"
               title="Apaga as cópias pequenas demais para serem vídeo — restos de páginas de erro que a fonte devolveu no lugar do filme. Não toca no seu acervo próprio.">
         Limpar cópias inválidas</button>
@@ -3447,6 +3454,51 @@ function abrirEnvioDeArquivo(categorias) {
 function ligarAcoesDoAcervo(resumo) {
   const enviar = $("#acervo-enviar");
   if (enviar) enviar.onclick = () => abrirEnvioDeArquivo(resumo && resumo.categorias);
+
+  // Apagar tudo — a operação mais destrutiva do painel.
+  //
+  // Age só na ABA ABERTA, e é isso que a torna segura: quem está vendo o cache não apaga o
+  // acervo próprio por engano. Um botão único levaria os dois juntos, e transformaria um
+  // clique impaciente — "o cache está cheio de lixo, apaga tudo" — em perda de arquivos que
+  // ninguém tem outra cópia.
+  //
+  // A confirmação diz NÚMEROS. "Tem certeza?" não informa nada; "182 arquivos, 81 GB" é o
+  // que permite alguém mudar de ideia a tempo.
+  const apagarTudo = $('#acervo-apagar-tudo');
+  if (apagarTudo) apagarTudo.onclick = async () => {
+    const proprio = estadoAcervo.aba === 'proprio';
+    const quantos = num(Number(apagarTudo.dataset.arquivos));
+    const tamanho = formatarBytes(Number(apagarTudo.dataset.bytes));
+
+    const ok = await confirmar(
+      proprio ? 'Apagar TODO o seu acervo próprio?' : 'Apagar todo o cache de fontes?',
+      proprio
+        ? `${quantos} arquivo(s), ${tamanho}.\n\n` +
+          `Estes arquivos NÃO existem em nenhum outro lugar. Não vieram de fonte nenhuma: ` +
+          `foram enviados por você, e apagá-los é perda definitiva.\n\n` +
+          `Não há como desfazer, e o sistema não guarda cópia.`
+        : `${quantos} arquivo(s), ${tamanho}.\n\n` +
+          `As fontes continuam com os originais: o que se perde é a vantagem de já tê-los ` +
+          `aqui. Os títulos voltam a ser buscados na fonte e serão copiados de novo conforme ` +
+          `forem assistidos.\n\n` +
+          `Inclui os protegidos — proteger vale contra a limpeza automática, não contra ` +
+          `esta ordem.`,
+      proprio ? 'Apagar definitivamente' : 'Apagar tudo');
+    if (!ok) return;
+
+    apagarTudo.disabled = true;
+    try {
+      const r = await api('/acervo/esvaziar', {
+        method: 'POST', corpo: { origem: estadoAcervo.aba },
+      });
+      aviso(`${num(r.removidos)} arquivo(s) na fila de remoção. Os arquivos somem conforme ` +
+            `o sistema os apaga do armazenamento.`, 'ok');
+      recarregarAcervo();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      apagarTudo.disabled = false;
+    }
+  };
 
   const limpar = $('#acervo-limpar-invalidas');
   if (limpar) limpar.onclick = async () => {

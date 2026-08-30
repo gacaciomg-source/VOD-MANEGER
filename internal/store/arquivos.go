@@ -1000,3 +1000,43 @@ func (s *Store) EstimarArmazenamento(ctx context.Context) ([]EstimativaDeArmazen
 	}
 	return out, wrapErr("estimando armazenamento", rows.Err())
 }
+
+// EsvaziarAcervo manda para a remoção TUDO de uma origem.
+//
+// # Por que por origem, e não tudo de uma vez
+//
+// Cache e acervo próprio respondem a perguntas diferentes, e a de apagar é a mais séria
+// delas. O cache tem o original na fonte: apagá-lo custa uma releitura. O acervo próprio não
+// existe em lugar nenhum além desta instalação, e apagá-lo é perda definitiva.
+//
+// Um botão que levasse os dois juntos transformaria um clique impaciente — "o cache está
+// cheio de lixo, apaga tudo" — em perda de arquivos que ninguém tem outra cópia. Separar
+// obriga a dizer QUAL dos dois, e é a diferença entre uma decisão e um acidente.
+//
+// # Por que marcar, e não apagar
+//
+// A remoção é em duas etapas: apagar o arquivo no armazenamento, depois esquecer a linha.
+// Fazer isso aqui, para centenas de arquivos numa requisição, a faria expirar no meio e
+// deixaria metade dos arquivos órfãos — ocupando espaço que nenhuma linha aponta.
+//
+// Marcados, eles entram na mesma fila que a remoção de um arquivo só usa, e o baixador os
+// consome no ritmo dele. Protegido não é exceção aqui: quem clica está mandando apagar
+// tudo, e "tudo" inclui o que foi protegido da limpeza AUTOMÁTICA.
+func (s *Store) EsvaziarAcervo(ctx context.Context, origem string) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE arquivos_guardados SET estado = 'removendo'
+		WHERE origem = $1 AND estado <> 'removendo'`, origem)
+	if err != nil {
+		return 0, wrapErr("esvaziando o acervo", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ResumoParaApagar diz o que um "apagar tudo" levaria.
+func (s *Store) ResumoParaApagar(ctx context.Context, origem string) (arquivos, bytes int64, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT count(*), coalesce(sum(bytes), 0)
+		FROM arquivos_guardados
+		WHERE origem = $1 AND estado <> 'removendo'`, origem).Scan(&arquivos, &bytes)
+	return arquivos, bytes, wrapErr("resumindo o que seria apagado", err)
+}
