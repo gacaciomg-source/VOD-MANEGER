@@ -148,15 +148,14 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	// para a fonte como sempre fez. É a garantia que torna ligar o acervo uma decisão sem
 	// risco: no pior caso ele não ajuda; em caso nenhum ele atrapalha.
 	if p.acervo != nil {
+		ids := make([]int64, len(ped.variantes))
 		for i := range ped.variantes {
-			arquivo := p.acervo.CopiaPronta(r.Context(), ped.variantes[i].ID)
-			if arquivo == nil {
-				continue
-			}
+			ids[i] = ped.variantes[i].ID
+		}
+		if arquivo := p.acervo.CopiaProntaDeAlguma(r.Context(), ids); arquivo != nil {
 			if p.servirDoAcervo(w, r, ped, arquivo, inicio) {
 				return
 			}
-			break
 		}
 	}
 

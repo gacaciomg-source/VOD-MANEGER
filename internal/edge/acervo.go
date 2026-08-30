@@ -30,6 +30,10 @@ import (
 // pede os bytes.
 type Acervo interface {
 	CopiaPronta(ctx context.Context, variantID int64) *store.ArquivoGuardado
+	// CopiaProntaDeAlguma procura entre VARIAS variantes numa consulta so. Uma por variante
+	// eram quatro idas ao banco antes do primeiro byte, e as tres primeiras normalmente nao
+	// achavam nada.
+	CopiaProntaDeAlguma(ctx context.Context, variantIDs []int64) *store.ArquivoGuardado
 	Abrir(ctx context.Context, arquivo *store.ArquivoGuardado, deslocamento int64) (io.ReadCloser, error)
 	RegistrarAcesso(ctx context.Context, id int64)
 	// TalvezGuardar e chamado DEPOIS de uma entrega bem-sucedida vinda da fonte. Nao

@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"vodmanager/internal/armazenamento"
@@ -66,6 +67,15 @@ type Servico struct {
 	//
 	// O cache e um ganho para amanha. Ele nunca pode custar o serviço de hoje.
 	vagasDeCaptura chan struct{}
+
+	// politica guarda a leitura mais recente das configuracoes.
+	//
+	// Ler a politica sao SEIS consultas ao banco, e ela e lida no caminho do primeiro byte
+	// de toda reproducao — mais uma vez no adiantamento. Eram doze idas ao banco por filme
+	// aberto, para responder perguntas cuja resposta muda quando alguem mexe numa tela.
+	politicaMu    sync.RWMutex
+	politicaCache Politica
+	politicaEm    time.Time
 }
 
 // MontadorDeNuvem constrói o backend de uma conta a partir das credenciais dela.
@@ -208,8 +218,36 @@ type Politica struct {
 	AdiantarNaNuvem bool
 }
 
-// PoliticaAtual lê as configurações do acervo.
+// validadeDaPolitica e por quanto tempo a leitura das configuracoes vale sem reler.
+//
+// Cinco segundos. E configuracao: muda quando alguem clica em Salvar, e nao a cada segundo.
+// Cinco segundos de atraso para uma mudanca de chave e imperceptivel; seis consultas ao banco
+// por filme aberto, com o espectador esperando, nao e.
+const validadeDaPolitica = 5 * time.Second
+
+// PoliticaAtual le as configuracoes do acervo, reaproveitando a leitura recente.
 func (s *Servico) PoliticaAtual(ctx context.Context) Politica {
+	s.politicaMu.RLock()
+	cache, em := s.politicaCache, s.politicaEm
+	s.politicaMu.RUnlock()
+	if time.Since(em) < validadeDaPolitica {
+		return cache
+	}
+
+	p := s.lerPolitica(ctx)
+	s.politicaMu.Lock()
+	s.politicaCache, s.politicaEm = p, time.Now()
+	s.politicaMu.Unlock()
+	return p
+}
+
+// lerPolitica vai ao banco de verdade.
+//
+// Sem trava durante a leitura, de proposito: duas reproducoes simultaneas podem ler as
+// configuracoes ao mesmo tempo e chegar ao mesmo resultado. O desperdicio e uma leitura
+// repetida; a alternativa seria segurar todas as outras reproducoes atras de um mutex
+// enquanto o banco responde, que e o oposto do que se quer aqui.
+func (s *Servico) lerPolitica(ctx context.Context) Politica {
 	p := Politica{
 		Destino:         store.BackendLocal,
 		IdadeMinima:     24 * time.Hour,
@@ -408,4 +446,19 @@ func (s *Servico) backendDaPolitica(ctx context.Context, pol Politica, nuvemID *
 		return nil, fmt.Errorf("%w: destino na nuvem sem conta", ErrSemBackend)
 	}
 	return s.BackendDaNuvem(ctx, *nuvemID)
+}
+
+// CopiaProntaDeAlguma procura a cópia utilizável entre várias variantes, numa consulta só.
+//
+// A ordem das variantes é respeitada: elas chegam por prioridade de reprodução, e a cópia da
+// fonte preferida deve ganhar da cópia de uma fonte de reserva.
+func (s *Servico) CopiaProntaDeAlguma(ctx context.Context, variantIDs []int64) *store.ArquivoGuardado {
+	a, err := s.store.ArquivoProntoDeAlguma(ctx, variantIDs)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("falha ao consultar o acervo", "erro", err)
+		}
+		return nil
+	}
+	return a
 }

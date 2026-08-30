@@ -658,3 +658,72 @@ func TestApelidosSobrevivemAoApagarAFonte(t *testing.T) {
 		t.Fatalf("a categoria declarada pela fonte devia ter ido junto; sobraram %d", declaracoes)
 	}
 }
+
+// TestBuscaDeCopiaRespeitaAPrioridade cobre a busca em lote que substituiu N consultas.
+//
+// O proxy perguntava por uma variante de cada vez até achar — quatro idas ao banco antes do
+// primeiro byte, e as três primeiras normalmente sem encontrar nada. Agora é uma consulta só.
+//
+// O que a troca NÃO pode perder é a ordem: as variantes chegam por prioridade de reprodução,
+// e a cópia da fonte preferida tem de ganhar da cópia de uma fonte de reserva. Um `IN` no SQL
+// não devolve nada ordenado, então a ordem é reimposta em Go — e é isso que este teste prende.
+func TestBuscaDeCopiaRespeitaAPrioridade(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+	filme, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Duas Fontes", NormalizedTitle: "duas fontes",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+
+	criarCopia := func(ext string, bytes int64) int64 {
+		v, err := env.Store.CreateVariant(ctx, store.NewVariant{
+			SourceID: fonte.ID, TargetKind: "content", TargetID: filme.ID,
+			ExternalID: ext, OriginURL: "http://exemplo.tld/" + ext, ContainerExt: "mp4",
+		})
+		if err != nil {
+			t.Fatalf("CreateVariant: %v", err)
+		}
+		if _, err := env.Store.EnfileirarArquivo(ctx, store.NovoArquivo{
+			VariantID: &v.ID, TargetKind: "content", TargetID: filme.ID,
+			Backend: store.BackendLocal, Origem: store.OrigemFonte,
+			Localizador: ext + ".mp4", Bytes: bytes,
+		}); err != nil {
+			t.Fatalf("EnfileirarArquivo: %v", err)
+		}
+		return v.ID
+	}
+
+	preferida := criarCopia("preferida", 900<<20)
+	reserva := criarCopia("reserva", 800<<20)
+
+	// A preferida vem primeiro na lista: é ela que deve ganhar.
+	a, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{preferida, reserva})
+	if err != nil {
+		t.Fatalf("ArquivoProntoDeAlguma: %v", err)
+	}
+	if a.VariantID == nil || *a.VariantID != preferida {
+		t.Fatal("a cópia da fonte preferida devia ganhar; a ordem da lista foi ignorada")
+	}
+
+	// Invertendo a ordem, a resposta acompanha — provando que é a lista que manda, e não
+	// a ordem em que o banco resolveu devolver as linhas.
+	a, err = env.Store.ArquivoProntoDeAlguma(ctx, []int64{reserva, preferida})
+	if err != nil {
+		t.Fatalf("ArquivoProntoDeAlguma invertido: %v", err)
+	}
+	if a.VariantID == nil || *a.VariantID != reserva {
+		t.Fatal("a ordem da lista precisa mandar, e não a ordem do banco")
+	}
+
+	// Sem nenhuma cópia, ausência — e não erro: é o caminho normal do cache vazio.
+	if _, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{999998, 999999}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("sem cópia devia ser ErrNotFound; veio: %v", err)
+	}
+}

@@ -1040,3 +1040,54 @@ func (s *Store) ResumoParaApagar(ctx context.Context, origem string) (arquivos, 
 		WHERE origem = $1 AND estado <> 'removendo'`, origem).Scan(&arquivos, &bytes)
 	return arquivos, bytes, wrapErr("resumindo o que seria apagado", err)
 }
+
+// ArquivoProntoDeAlguma procura a cópia utilizável entre VÁRIAS variantes, de uma vez.
+//
+// # Por que uma consulta, e não uma por variante
+//
+// Um filme com quatro fontes tem quatro variantes, e o proxy perguntava por cada uma até
+// achar. Quatro idas ao banco antes do primeiro byte, em toda reprodução — e as três
+// primeiras normalmente não encontram nada, porque a cópia é da fonte que foi usada.
+//
+// Aqui é uma ida só. A diferença não aparece numa máquina ociosa; aparece quando vinte
+// pessoas abrem filmes ao mesmo tempo e cada uma dessas consultas está atrás de outras
+// dezenove.
+//
+// A ordem do resultado segue a das variantes recebidas: elas já vêm por prioridade, e a
+// cópia da fonte preferida deve ganhar da cópia de uma fonte de reserva.
+func (s *Store) ArquivoProntoDeAlguma(ctx context.Context, variantIDs []int64) (*ArquivoGuardado, error) {
+	if len(variantIDs) == 0 {
+		return nil, ErrNotFound
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+colunasArquivo+` FROM arquivos_guardados
+		WHERE variant_id = ANY($1) AND estado = 'pronto'
+		  AND bytes >= $2
+		  AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`,
+		variantIDs, TamanhoMinimoDeVideo)
+	if err != nil {
+		return nil, wrapErr("buscando arquivo guardado das variantes", err)
+	}
+	defer rows.Close()
+
+	achados := map[int64]*ArquivoGuardado{}
+	for rows.Next() {
+		a, err := lerArquivo(rows)
+		if err != nil {
+			return nil, wrapErr("buscando arquivo guardado das variantes", err)
+		}
+		if a.VariantID != nil {
+			achados[*a.VariantID] = a
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapErr("buscando arquivo guardado das variantes", err)
+	}
+
+	for _, id := range variantIDs {
+		if a, ok := achados[id]; ok {
+			return a, nil
+		}
+	}
+	return nil, ErrNotFound
+}
