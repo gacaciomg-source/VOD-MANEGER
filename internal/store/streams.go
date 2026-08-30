@@ -95,23 +95,46 @@ func (s *Store) ResolveEpisodeForStream(ctx context.Context, episodeID int64) (*
 // principal vem primeiro, e só depois entra a prioridade da fonte. É esta ordem que a
 // tentativa de failover percorre.
 func (s *Store) playableVariants(ctx context.Context, kind string, targetID, contentID, episodeID int64) ([]PlayableVariant, error) {
+	// UMA variante por fonte, e essa é a regra inteira.
+	//
+	// Uma fonte costuma declarar o mesmo filme em várias pastas — romance, juvenil, drama —
+	// e cada declaração vira uma variante. Todas apontam para o MESMO servidor.
+	//
+	// Isso não é redundância: é o oposto dela. Se o servidor cai, as sete caem juntas — e o
+	// failover, que tenta três origens antes de desistir, gasta as três na mesma fonte morta
+	// e nunca chega na fonte que estava funcionando. O espectador espera três tempos de
+	// espera para receber um erro que a segunda fonte não daria.
+	//
+	// Redundância só existe ENTRE fontes. Dentro de uma, a segunda variante não acrescenta
+	// nada e custa uma tentativa.
+	//
+	// A escolha de qual fica segue a mesma ordem que já governava tudo: escolha manual do
+	// administrador primeiro, depois a prioridade da fonte, depois a mais antiga.
 	rows, err := s.pool.Query(ctx, `
-		SELECT v.id, v.source_id, s.name, s.kind, s.base_url, s.priority,
-		       v.origin_url, v.stream_ref, v.container_ext, s.max_connections
-		FROM source_variants v
-		JOIN sources s ON s.id = v.source_id
-		LEFT JOIN contents c ON c.id = $3::bigint
-		LEFT JOIN episodes e ON e.id = $4::bigint
-		WHERE v.target_kind = $1 AND v.target_id = $2
-		  AND v.enabled AND v.available AND s.enabled
-		ORDER BY
-			CASE
-				WHEN v.id IN (c.primary_variant_id,   e.primary_variant_id)   THEN 0
-				WHEN v.id IN (c.secondary_variant_id, e.secondary_variant_id) THEN 1
-				WHEN v.id IN (c.tertiary_variant_id,  e.tertiary_variant_id)  THEN 2
-				ELSE 3
-			END,
-			s.priority, v.id`,
+		SELECT id, source_id, name, kind, base_url, priority,
+		       origin_url, stream_ref, container_ext, max_connections
+		FROM (
+			SELECT DISTINCT ON (v.source_id)
+			       v.id, v.source_id, s.name, s.kind, s.base_url, s.priority,
+			       v.origin_url, v.stream_ref, v.container_ext, s.max_connections,
+			       CASE
+			           WHEN v.id IN (c.primary_variant_id,   e.primary_variant_id)   THEN 0
+			           WHEN v.id IN (c.secondary_variant_id, e.secondary_variant_id) THEN 1
+			           WHEN v.id IN (c.tertiary_variant_id,  e.tertiary_variant_id)  THEN 2
+			           ELSE 3
+			       END AS escolha
+			FROM source_variants v
+			JOIN sources s ON s.id = v.source_id
+			LEFT JOIN contents c ON c.id = $3::bigint
+			LEFT JOIN episodes e ON e.id = $4::bigint
+			WHERE v.target_kind = $1 AND v.target_id = $2
+			  AND v.enabled AND v.available AND s.enabled
+			ORDER BY v.source_id, escolha, s.priority, v.id
+		) melhores
+		-- A ordem final é a de reprodução, e não a de agrupamento: o DISTINCT ON exige
+		-- ordenar por source_id primeiro, e servir nessa ordem daria a vez à fonte de menor
+		-- id em vez de à de maior prioridade.
+		ORDER BY escolha, priority, id`,
 		kind, targetID, nullIfZero(contentID), nullIfZero(episodeID))
 	if err != nil {
 		return nil, wrapErr("listando variantes jogáveis", err)

@@ -2045,6 +2045,24 @@ async function verDuplicatas() {
         próximos.
       </div>` : ''}
 
+    ${d.sugestoes.length ? `
+      <div class="cartao">
+        <div class="grupo-botoes" style="justify-content:flex-start">
+          <button class="btn btn-primario" id="unir-todas">Unir todas de uma vez</button>
+        </div>
+        <p class="dica" style="margin:10px 0 0">
+          Decidir par a par funciona com dez sugestões. Com fontes que se sobrepõem são
+          centenas — o mesmo filme aparece seis vezes porque cada fonte o declara numa pasta
+          diferente.
+          <br>
+          Em cada par sobrevive o lado com <b>mais fontes</b>: é o que continua tocando se
+          alguma cair. Empatando, vence o título <b>sem marcação</b> de estado.
+          <br>
+          <b>Nenhuma fonte é perdida.</b> Unir move as fontes do lado que sai para o que
+          fica — o que desaparece é a linha repetida no catálogo, não o acesso ao filme.
+        </p>
+      </div>` : ''}
+
     ${d.sugestoes.length ? d.sugestoes.map((s, i) => `
       <div class="cartao par-duplicata" data-par="${i}">
         <div class="duplicata-lados">
@@ -2101,6 +2119,29 @@ async function verDuplicatas() {
       await decidir(i, manter, b);
     });
   });
+
+  const unirTodas = $('#unir-todas');
+  if (unirTodas) unirTodas.onclick = async () => {
+    const ok = await confirmar('Unir todas as duplicatas sugeridas?',
+      `${num(d.total)} par(es) serão unidos de uma vez.\n\n` +
+      `Em cada um sobrevive o lado com mais fontes, e as fontes do outro migram para ele. ` +
+      `Nenhum acesso a filme se perde: some a linha repetida, não o conteúdo.\n\n` +
+      `Se algum par era de filmes realmente diferentes, dá para separar depois pela tela ` +
+      `do conteúdo — mas é trabalhoso. Vale conferir a lista antes.`,
+      'Unir todas');
+    if (!ok) return;
+
+    unirTodas.disabled = true;
+    try {
+      const r = await api('/duplicatas/unir-tudo', { method: 'POST' });
+      aviso(`${num(r.unidos)} par(es) unidos, ${num(r.variantes_movidas)} fonte(s) ` +
+            `migradas.`, 'ok');
+      verDuplicatas();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      unirTodas.disabled = false;
+    }
+  };
 
   $$('[data-diferentes]').forEach(b => {
     b.onclick = () => comAcao(async () => {

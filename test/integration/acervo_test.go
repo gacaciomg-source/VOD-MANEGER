@@ -727,3 +727,56 @@ func TestBuscaDeCopiaRespeitaAPrioridade(t *testing.T) {
 		t.Fatalf("sem cópia devia ser ErrNotFound; veio: %v", err)
 	}
 }
+
+// TestUmaVariantePorFonte prende a regra que faz o failover ter sentido.
+//
+// Uma fonte declara o mesmo filme em várias pastas — romance, juvenil, drama — e cada
+// declaração virava uma variante. Todas apontam para o MESMO servidor.
+//
+// Isso não é redundância: é o oposto. Se o servidor cai, as sete caem juntas, e o failover —
+// que tenta três origens antes de desistir — gasta as três na mesma fonte morta sem nunca
+// chegar na fonte que estava funcionando. O espectador espera três vezes o tempo de espera
+// para receber um erro que a segunda fonte não daria.
+func TestUmaVariantePorFonte(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	// Uma fonte de verdade, e nao a interna do acervo proprio: aquela nasce desabilitada,
+	// e a consulta de reproducao ignora fonte desabilitada — como deve.
+	var fonteID int64
+	if err := env.Pool.QueryRow(ctx, `
+		INSERT INTO sources (name, kind, base_url, priority, enabled)
+		VALUES ('fonte de teste', 'm3u', 'http://exemplo.tld', 1, true)
+		RETURNING id`).Scan(&fonteID); err != nil {
+		t.Fatalf("criando a fonte: %v", err)
+	}
+	filme, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Hipotese do Amor", NormalizedTitle: "hipotese do amor",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+
+	// O mesmo filme, na mesma fonte, em três pastas.
+	for _, pasta := range []string{"romance", "juvenil", "drama"} {
+		if _, err := env.Store.CreateVariant(ctx, store.NewVariant{
+			SourceID: fonteID, TargetKind: "content", TargetID: filme.ID,
+			ExternalID: "hip-" + pasta, OriginURL: "http://exemplo.tld/" + pasta + ".mp4",
+			ContainerExt: "mp4",
+		}); err != nil {
+			t.Fatalf("CreateVariant(%s): %v", pasta, err)
+		}
+	}
+
+	_, variantes, err := env.Store.ResolveContentForStream(ctx, filme.ID)
+	if err != nil {
+		t.Fatalf("ResolveContentForStream: %v", err)
+	}
+	if len(variantes) != 1 {
+		t.Fatalf("três pastas da MESMA fonte deviam dar uma origem só; vieram %d — o "+
+			"failover gastaria as tentativas todas no mesmo servidor", len(variantes))
+	}
+	if variantes[0].SourceID != fonteID {
+		t.Fatalf("a origem devia ser da fonte cadastrada; veio %d", variantes[0].SourceID)
+	}
+}
