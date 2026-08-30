@@ -1167,9 +1167,17 @@ function tabelaVariantes(variantes) {
         <td>${v.container_ext ? `<span class="etiqueta neutro">${esc(v.container_ext)}</span>` : '—'}</td>
         <td>${[...(v.quality_tags || []), ...(v.language_tags || [])]
               .map(t => `<span class="etiqueta neutro">${esc(t)}</span>`).join(' ') || '—'}</td>
+        <!-- "indisponível" dizia a coisa errada, e alguém clicou no link para descobrir:
+             ele abria normalmente. A marca não vem de testar o vídeo — vem de a FONTE ter
+             parado de listar aquele item no catálogo dela, por várias sincronizações
+             seguidas. O arquivo costuma continuar servindo; o que sumiu foi a menção a ele.
+             Chamar isso de "indisponível" em vermelho fazia parecer defeito onde há apenas
+             uma pasta reorganizada. -->
         <td>${v.available
-              ? '<span class="etiqueta ok">disponível</span>'
-              : '<span class="etiqueta erro">indisponível</span>'}
+              ? '<span class="etiqueta ok">listada</span>'
+              : `<span class="etiqueta alerta"
+                       title="A fonte parou de listar este item no catálogo dela. O link costuma continuar funcionando — só deixou de aparecer nas listagens.">
+                   fora do catálogo</span>`}
             ${!v.enabled ? '<span class="etiqueta neutro">desativada</span>' : ''}</td>
         <td><button class="btn btn-mini" data-origem="${v.id}">Link final</button></td>
       </tr>`).join('')}
