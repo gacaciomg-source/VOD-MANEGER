@@ -591,3 +591,70 @@ func TestEstimarArmazenamentoExecuta(t *testing.T) {
 		t.Fatal("a estimativa precisa ser uma lista vazia, e nunca nula: a tela itera sobre ela")
 	}
 }
+
+// TestApelidosSobrevivemAoApagarAFonte confirma o que o schema já garante.
+//
+// A preocupação é legítima e a resposta é boa: `categories` é a tabela CANÔNICA — as pastas
+// que você organiza — e não pertence a fonte nenhuma. Quem morre com a fonte é
+// `source_categories`, a categoria como aquela fonte a declara.
+//
+// Então apagar todas as fontes leva embora as declarações e preserva a organização: as
+// pastas e os apelidos ficam, e uma fonte recadastrada cai neles automaticamente.
+//
+// Este teste existe porque a distinção é invisível de fora, e alguém — inclusive eu — vai
+// olhar o CASCADE de `source_categories` de novo um dia e concluir o contrário.
+func TestApelidosSobrevivemAoApagarAFonte(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	fonte, err := env.Store.FonteDoAcervo(ctx)
+	if err != nil {
+		t.Fatalf("FonteDoAcervo: %v", err)
+	}
+
+	var destinoID int64
+	if err := env.Pool.QueryRow(ctx, `
+		INSERT INTO categories (name, normalized_name, content_type)
+		VALUES ('Novelas', 'novelas', 'movie') RETURNING id`).Scan(&destinoID); err != nil {
+		t.Fatalf("criando a pasta canônica: %v", err)
+	}
+	if _, err := env.Pool.Exec(ctx, `
+		INSERT INTO source_categories
+			(source_id, external_id, declared_name, normalized_name, content_type, category_id)
+		VALUES ($1, 'v44', 'Vídeos 44', 'videos 44', 'movie', $2)`,
+		fonte.ID, destinoID); err != nil {
+		t.Fatalf("criando a categoria da fonte: %v", err)
+	}
+	if _, err := env.Pool.Exec(ctx, `
+		INSERT INTO category_aliases
+			(normalized_name, content_type, category_id, declared_name, origem)
+		VALUES ('videos 44', 'movie', $1, 'Vídeos 44', 'uniao')`, destinoID); err != nil {
+		t.Fatalf("criando o apelido: %v", err)
+	}
+
+	if _, err := env.Pool.Exec(ctx, `DELETE FROM sources WHERE id = $1`, fonte.ID); err != nil {
+		t.Fatalf("apagando a fonte: %v", err)
+	}
+
+	// A pasta e o apelido continuam de pé, e o apelido continua resolvendo.
+	idx, err := env.Store.ApelidosCategoria(ctx)
+	if err != nil {
+		t.Fatalf("ApelidosCategoria: %v", err)
+	}
+	if idx[store.ChaveCategoria("videos 44", "movie")] != destinoID {
+		t.Fatal("o apelido não sobreviveu: a organização feita à mão se perderia ao " +
+			"recadastrar uma fonte")
+	}
+
+	// A declaração da fonte, essa sim, foi embora junto — é dela, e sem a fonte não
+	// significa nada.
+	var declaracoes int64
+	if err := env.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM source_categories WHERE normalized_name = 'videos 44'`).
+		Scan(&declaracoes); err != nil {
+		t.Fatalf("contando declarações: %v", err)
+	}
+	if declaracoes != 0 {
+		t.Fatalf("a categoria declarada pela fonte devia ter ido junto; sobraram %d", declaracoes)
+	}
+}
