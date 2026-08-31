@@ -162,6 +162,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		Crypto:      box,
 		Log:         log,
 		MontarNuvem: montarNuvem,
+		// O MESMO limiar que o proxy usa. As duas metades do sistema precisam concordar
+		// sobre o que é um filme — senão o cache guarda exatamente o que a reprodução
+		// recusaria, e passa a servi-lo no lugar dela.
+		TamanhoMinimoDeVideo: int64(cfg.VideoMinimoMB) << 20,
 	})
 
 	// Plano de dados: entrega os bytes de vídeo. Existe tanto no Manager quanto num Node.

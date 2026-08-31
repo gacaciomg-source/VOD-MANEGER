@@ -75,17 +75,6 @@ const intervaloDaFila = 30 * time.Second
 // blocos, e uma escrita no banco por bloco custaria mais que a própria cópia.
 const intervaloDoProgresso = 5 * time.Second
 
-// tamanhoMinimoDeCopia e o piso abaixo do qual uma copia nao pode ser um video.
-//
-// Um megabyte. Nao e uma estimativa do tamanho certo — e o limiar da plausibilidade: nenhum
-// video existe abaixo disso, e o que cai aqui e sempre aviso, pagina de erro ou resposta
-// vazia.
-//
-// Existe porque as demais conferencias dependem do Content-Length, e a fonte pode nao
-// anuncia-lo. Sem este piso, uma pagina de erro de dois quilobytes virava uma copia
-// "pronta" que o acervo passava a servir no lugar da fonte.
-const tamanhoMinimoDeCopia = 1 << 20
-
 // Resolvedor materializa a URL de origem de uma variante.
 //
 // Interface e não implementação concreta, pelo mesmo motivo do plano de dados: este pacote
@@ -512,10 +501,11 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 	//
 	// Este piso é sobre plausibilidade, não sobre o tamanho certo: nenhum vídeo tem menos de
 	// um megabyte. O que cai aqui é aviso, página de erro ou resposta vazia — nunca conteúdo.
-	if local.Bytes < tamanhoMinimoDeCopia {
+	if minimo := b.servico.MinimoDeVideo(); local.Bytes < minimo {
 		_ = destino.Apagar(context.Background(), local.Localizador)
-		return fmt.Errorf("a fonte entregou apenas %d bytes, que não são um vídeo; "+
-			"a cópia foi descartada", local.Bytes)
+		return fmt.Errorf("a fonte entregou apenas %d bytes, abaixo do mínimo de %d que "+
+			"distingue um filme de um aviso de manutenção; a cópia foi descartada",
+			local.Bytes, minimo)
 	}
 
 	// Se o piso do store recusar, o que foi gravado precisa sumir: um arquivo sem linha que

@@ -82,7 +82,12 @@ type resultadoDaCaptura struct {
 func (s *Servico) TalvezCapturar(ctx context.Context, v *store.PlayableVariant,
 	alvo *store.StreamTarget, inicio, tamanho int64, ext string) *Captura {
 
-	if inicio != 0 || tamanho <= 0 {
+	// O tamanho ANUNCIADO ja denuncia o aviso de manutencao, antes de gravar um byte.
+	//
+	// E o mesmo limiar que o proxy usa para trocar de fonte. Sem ele, um aviso de dez
+	// segundos era gravado como se fosse o filme — e dai em diante servido NO LUGAR dele,
+	// para sempre: o player abria, tinha duracao, e mostrava tela preta.
+	if inicio != 0 || tamanho < s.MinimoDeVideo() {
 		return nil
 	}
 

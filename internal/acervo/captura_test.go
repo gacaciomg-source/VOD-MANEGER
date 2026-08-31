@@ -5,6 +5,8 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"vodmanager/internal/store"
 )
 
 // A garantia que estes testes protegem é uma só: escrever na captura NUNCA para a
@@ -199,5 +201,37 @@ func TestVagasDeCapturaLimitamAConcorrencia(t *testing.T) {
 	<-vagas
 	if !pegar() {
 		t.Fatal("a vaga devolvida não voltou a ser usada")
+	}
+}
+
+// TestMinimoDeVideoNuncaDesceAbaixoDoPiso prende a regra que evita a tela preta.
+//
+// O proxy tratava qualquer resposta abaixo de cem megabytes como possível aviso de
+// manutenção e trocava de fonte. O cache só recusava abaixo de um megabyte — então um aviso
+// de dez segundos com cinco megabytes passava, e era gravado COMO SE FOSSE O FILME.
+//
+// Daí em diante o acervo o servia no lugar da fonte, para sempre: o player abria, tinha
+// duração, e mostrava tela preta. As duas metades do sistema precisam concordar sobre o que
+// é um filme.
+//
+// E o piso nunca desce: mesmo com a detecção de manutenção desligada, um megabyte continua
+// não sendo um vídeo.
+func TestMinimoDeVideoNuncaDesceAbaixoDoPiso(t *testing.T) {
+	casos := []struct {
+		nome        string
+		configurado int64
+		esperado    int64
+	}{
+		{"limiar do proxy manda", 100 << 20, 100 << 20},
+		{"sem limiar cai no piso", 0, store.TamanhoMinimoDeVideo},
+		{"limiar menor que o piso não vale", 1000, store.TamanhoMinimoDeVideo},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			s := &Servico{minimoDeVideo: c.configurado}
+			if got := s.MinimoDeVideo(); got != c.esperado {
+				t.Fatalf("esperava %d, veio %d", c.esperado, got)
+			}
+		})
 	}
 }

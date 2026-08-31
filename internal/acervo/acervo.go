@@ -67,6 +67,16 @@ type Servico struct {
 	//
 	// O cache e um ganho para amanha. Ele nunca pode custar o serviço de hoje.
 	vagasDeCaptura chan struct{}
+	// minimoDeVideo e o tamanho abaixo do qual uma copia nao e considerada filme.
+	//
+	// Precisa ser o MESMO limiar do proxy, e essa e a licao: o proxy tratava qualquer
+	// resposta abaixo de cem megabytes como possivel aviso de manutencao e trocava de
+	// fonte, enquanto o cache so recusava abaixo de um megabyte. Um aviso de dez segundos
+	// com cinco megabytes passava — e era gravado como se fosse o filme.
+	//
+	// Dai em diante o acervo o servia NO LUGAR da fonte, para sempre: o player abria, tinha
+	// duracao, e mostrava tela preta.
+	minimoDeVideo int64
 
 	// politica guarda a leitura mais recente das configuracoes.
 	//
@@ -92,6 +102,9 @@ type Opcoes struct {
 	Crypto      *cryptobox.Box
 	Log         *slog.Logger
 	MontarNuvem MontadorDeNuvem
+	// TamanhoMinimoDeVideo e o mesmo limiar que o proxy usa para reconhecer aviso de
+	// manutencao. Zero cai no piso absoluto de plausibilidade.
+	TamanhoMinimoDeVideo int64
 }
 
 // Novo cria o serviço do acervo.
@@ -100,6 +113,7 @@ func Novo(o Opcoes) *Servico {
 		store: o.Store, registro: o.Registro, crypto: o.Crypto,
 		log: o.Log, montarNuvem: o.MontarNuvem,
 		vagasDeCaptura: make(chan struct{}, capturasSimultaneas),
+		minimoDeVideo:  o.TamanhoMinimoDeVideo,
 	}
 }
 
@@ -461,4 +475,16 @@ func (s *Servico) CopiaProntaDeAlguma(ctx context.Context, variantIDs []int64) *
 		return nil
 	}
 	return a
+}
+
+// MinimoDeVideo é o tamanho abaixo do qual uma cópia não é aceita como filme.
+//
+// Cai no piso absoluto de plausibilidade quando não há limiar configurado — e o piso nunca é
+// ultrapassado para baixo: mesmo com a detecção de manutenção desligada, um megabyte continua
+// não sendo um vídeo.
+func (s *Servico) MinimoDeVideo() int64 {
+	if s.minimoDeVideo > store.TamanhoMinimoDeVideo {
+		return s.minimoDeVideo
+	}
+	return store.TamanhoMinimoDeVideo
 }
