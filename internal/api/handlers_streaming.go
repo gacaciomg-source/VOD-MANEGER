@@ -659,6 +659,13 @@ type configPublicaRequest struct {
 	CacheEspacoMinimoPct  *int    `json:"cache_espaco_minimo_pct"`
 	CacheArquivarSempre   *bool   `json:"cache_arquivar_sempre"`
 	CacheAdiantarNaNuvem  *bool   `json:"cache_adiantar_na_nuvem"`
+	// TMDBAPIKey é de ESCRITA apenas. Ela nunca volta numa resposta: uma chave que a tela
+	// mostra é uma chave que vaza pelo histórico do navegador e por qualquer captura de tela.
+	//
+	// O painel sabe apenas se ela EXISTE, o que basta para mostrar "configurada" em vez de
+	// um campo vazio que parece nunca ter sido preenchido.
+	TMDBAPIKey *string `json:"tmdb_api_key"`
+	TMDBIdioma *string `json:"tmdb_idioma"`
 }
 
 // handleGetSettings devolve as configurações editáveis pelo painel.
@@ -695,7 +702,11 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"cache_espaco_minimo_pct":  s.lerTexto(r, store.SettingCacheEspacoMinimoPct, "10"),
 		"cache_arquivar_sempre":    s.lerBool(r, store.SettingCacheArquivarSempre),
 		"cache_adiantar_na_nuvem":  s.lerBool(r, store.SettingCacheAdiantarNaNuvem),
-		"endereco_atual":           atual,
+		// Se EXISTE, e nao qual e. A tela precisa saber para mostrar "configurada" em vez de
+		// um campo vazio que parece nunca ter sido preenchido.
+		"tmdb_configurada": s.lerTexto(r, store.SettingTMDBAPIKey, "") != "",
+		"tmdb_idioma":      s.lerTexto(r, store.SettingTMDBIdioma, "pt-BR"),
+		"endereco_atual":   atual,
 		// Divergente quando o endereço que entrega o conteúdo não é por onde você chegou.
 		// Nem sempre é erro — quem separa o domínio do painel do domínio do conteúdo faz
 		// isso de propósito. Por isso a tela oferece a correção, e não a aplica sozinha.
@@ -800,6 +811,23 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err, "gravando configuração do acervo")
 			return
 		}
+	}
+	if req.TMDBIdioma != nil {
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingTMDBIdioma,
+			strings.TrimSpace(*req.TMDBIdioma)); err != nil {
+			s.fail(w, r, err, "gravando o idioma do TMDB")
+			return
+		}
+	}
+	if req.TMDBAPIKey != nil {
+		// Vazio APAGA a chave, e isso e proposital: e o unico jeito de desligar o recurso
+		// pela tela. Sem isso, uma chave revogada ficaria gravada para sempre.
+		if err := s.deps.Store.SetSetting(r.Context(), store.SettingTMDBAPIKey,
+			strings.TrimSpace(*req.TMDBAPIKey)); err != nil {
+			s.fail(w, r, err, "gravando a chave do TMDB")
+			return
+		}
+		s.logEvent(r, "catalogo", "info", "chave do TMDB atualizada", actorOf(r), nil)
 	}
 	if req.CacheAdiantarNaNuvem != nil {
 		if err := s.deps.Store.SetSetting(r.Context(), store.SettingCacheAdiantarNaNuvem,

@@ -4134,8 +4134,44 @@ async function verConfiguracoes() {
       </p>
 
       <div class="erro" id="cfg-cache-erro" hidden></div>
+    </div>
+
+    <div class="cartao">
+      <h2>Organizar por gênero (TMDB)</h2>
+      <p class="discreto">
+        As fontes entregam o filme, mas não o gênero — por isso milhares de títulos caem numa
+        pasta só. O TMDB sabe o gênero de praticamente todo filme lançado, e com uma chave o
+        sistema cria as pastas e distribui os títulos sozinho, em <b>Categorias</b>.
+        <br>
+        A chave é <b>gratuita</b>: crie uma conta em <span class="mono">themoviedb.org</span>,
+        vá em Configurações → API, e copie a chave.
+      </p>
+
+      <div class="linha-campos">
+        <label>Chave da API
+          <input id="cfg-tmdb-chave" type="password" autocomplete="off"
+                 placeholder="${c.tmdb_configurada ? 'configurada — digite para trocar' : 'cole a chave aqui'}">
+        </label>
+        <label>Idioma dos gêneros
+          <input id="cfg-tmdb-idioma" value="${esc(c.tmdb_idioma || 'pt-BR')}">
+        </label>
+      </div>
+      <p class="dica">
+        A chave nunca é mostrada de volta, nem para você: uma chave que a tela exibe é uma
+        chave que vaza pelo histórico do navegador e por qualquer captura de tela.
+        <br>
+        Deixar o campo em branco <b>mantém</b> a que já está guardada — ele nasce vazio
+        justamente porque a chave não volta. Para trocar, digite a nova; para remover, use o
+        botão abaixo.
+        <br>
+        O idioma decide o nome das pastas: <span class="mono">pt-BR</span> cria "Ação" e
+        "Comédia"; <span class="mono">en-US</span> criaria "Action" e "Comedy".
+      </p>
       <div class="grupo-botoes" style="justify-content:flex-start">
         <button class="btn btn-primario" id="cfg-cache-salvar">Salvar</button>
+        ${c.tmdb_configurada
+          ? '<button class="btn btn-sutil" id="cfg-tmdb-remover">Remover a chave</button>'
+          : ''}
         <button class="btn btn-sutil" onclick="location.hash='#/acervo'">Ver o acervo</button>
       </div>
     </div>
@@ -4201,6 +4237,20 @@ async function verConfiguracoes() {
   // Pelo mesmo endpoint, mas mandando só os campos do acervo: o servidor só toca no que
   // vem no corpo. Sem essa separação, salvar aqui reescreveria os endereços com o que
   // estivesse nos campos acima — inclusive vazio, se alguém tivesse limpado sem salvar.
+  const removerChave = $('#cfg-tmdb-remover');
+  if (removerChave) removerChave.onclick = async () => {
+    const ok = await confirmar('Remover a chave do TMDB?',
+      'A classificação por gênero deixa de funcionar até você colar outra.\n\n' +
+      'As pastas já criadas e os títulos já organizados permanecem: o que para é a ' +
+      'organização de conteúdo novo.', 'Remover');
+    if (!ok) return;
+    try {
+      await api('/settings', { method: 'PATCH', corpo: { tmdb_api_key: '' } });
+      aviso('Chave removida.', 'ok');
+      verConfiguracoes();
+    } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
+  };
+
   $('#cfg-cache-salvar').onclick = async e => {
     const erro = $('#cfg-cache-erro');
     erro.hidden = true;
@@ -4219,6 +4269,13 @@ async function verConfiguracoes() {
           cache_limite_bytes: Math.round((Number($("#cfg-cache-teto").value) || 0) * (1024 ** 3)),
           cache_arquivar_sempre: $("#cfg-cache-arquivar").checked,
           cache_adiantar_na_nuvem: $("#cfg-cache-adiantar-nuvem").checked,
+          tmdb_idioma: $("#cfg-tmdb-idioma").value.trim(),
+          // A chave só é enviada quando alguém DIGITOU algo.
+          //
+          // Enviar sempre apagaria a chave existente a cada Salvar, porque o campo nasce
+          // vazio (ela nunca volta do servidor). Quem quer apagar de propósito precisa de
+          // um jeito, e o jeito é o botão abaixo — explícito, e não um efeito colateral.
+          ...($("#cfg-tmdb-chave").value ? { tmdb_api_key: $("#cfg-tmdb-chave").value } : {}),
         },
       });
       aviso($('#cfg-cache').checked

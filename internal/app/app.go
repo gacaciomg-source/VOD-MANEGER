@@ -31,7 +31,6 @@ import (
 	"vodmanager/internal/store"
 	vsync "vodmanager/internal/sync"
 	"vodmanager/internal/sysinfo"
-	"vodmanager/internal/tmdb"
 	"vodmanager/internal/transport"
 )
 
@@ -122,11 +121,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	// menos por uma operacao fora do ar.
 	var categorizador *vsync.Categorizador
 	if ehManager {
-		cliente := tmdb.Novo(cfg.TMDBAPIKey, cfg.TMDBIdioma)
-		categorizador = vsync.NovoCategorizador(st, cliente, log)
-		if cliente == nil {
-			log.Info("classificação por gênero desligada: sem TMDB_API_KEY")
-		}
+		// A chave do ambiente é o padrão; o painel a sobrepõe quando alguém a configura lá.
+		// O cliente é montado na hora de usar, e não aqui: assim trocar a chave pela tela
+		// vale na próxima classificação, sem reiniciar o serviço.
+		categorizador = vsync.NovoCategorizador(st, cfg.TMDBAPIKey, cfg.TMDBIdioma, log)
 	}
 
 	// Medição de recursos da máquina: alimenta a tela de sistema do painel.

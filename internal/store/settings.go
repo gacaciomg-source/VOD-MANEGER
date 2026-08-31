@@ -102,6 +102,19 @@ const (
 	// Noventa dias por padrao: e o bastante para investigar um problema do mes passado e
 	// para comparar um mes com o anterior. Zero desliga a poda, para quem quer tudo.
 	SettingHistoricoDias = "historico_dias"
+
+	// SettingTMDBAPIKey habilita a classificacao por genero.
+	//
+	// Guardada aqui, e nao so em variavel de ambiente, porque trocar uma chave de API e uma
+	// tarefa de quem administra pelo painel — nao de quem tem acesso ao servidor. Assim ela
+	// tambem passa a valer sem reiniciar o servico.
+	//
+	// NUNCA volta numa resposta. O painel sabe se ela existe, e nada alem disso: uma chave
+	// que a tela mostra e uma chave que vaza pelo historico do navegador.
+	SettingTMDBAPIKey = "tmdb_api_key"
+
+	// SettingTMDBIdioma escolhe a lingua dos generos. As pastas herdam esse nome.
+	SettingTMDBIdioma = "tmdb_idioma"
 )
 
 // GetSetting lê uma configuração. Ausência não é erro: devolve o padrão.

@@ -59,8 +59,11 @@ type Andamento struct {
 // Categorizador classifica conteúdos sem pasta usando o TMDB.
 type Categorizador struct {
 	store *store.Store
-	tmdb  *tmdb.Cliente
 	log   *slog.Logger
+	// chaveDoAmbiente e a configurada por variavel de ambiente, usada quando o painel nao
+	// tem nenhuma. Ela existia primeiro, e tirar o suporte quebraria quem ja a configurou.
+	chaveDoAmbiente  string
+	idiomaDoAmbiente string
 
 	mu        sync.Mutex
 	andamento Andamento
@@ -69,8 +72,29 @@ type Categorizador struct {
 
 // NovoCategorizador cria o serviço. Cliente nulo (sem chave) é aceito: o Iniciar recusa com
 // uma mensagem que diz o que fazer, em vez de o construtor falhar na partida do sistema.
-func NovoCategorizador(st *store.Store, cli *tmdb.Cliente, log *slog.Logger) *Categorizador {
-	return &Categorizador{store: st, tmdb: cli, log: log}
+func NovoCategorizador(st *store.Store, chave, idioma string, log *slog.Logger) *Categorizador {
+	return &Categorizador{store: st, log: log, chaveDoAmbiente: chave, idiomaDoAmbiente: idioma}
+}
+
+// cliente monta o cliente do TMDB na hora de usar, e nao na partida do sistema.
+//
+// Assim trocar a chave pelo painel vale na proxima classificacao, sem reiniciar o servico. O
+// painel vence o ambiente: quem esta olhando a tela e quem acabou de decidir.
+func (c *Categorizador) cliente(ctx context.Context) *tmdb.Cliente {
+	chave := c.chaveDoAmbiente
+	if v, err := c.store.GetSetting(ctx, store.SettingTMDBAPIKey, ""); err == nil && v != "" {
+		chave = v
+	}
+	idioma := c.idiomaDoAmbiente
+	if v, err := c.store.GetSetting(ctx, store.SettingTMDBIdioma, ""); err == nil && v != "" {
+		idioma = v
+	}
+	return tmdb.Novo(chave, idioma)
+}
+
+// TemChave diz se a classificacao pode ser usada. A chave em si nunca sai daqui.
+func (c *Categorizador) TemChave(ctx context.Context) bool {
+	return c.cliente(ctx) != nil
 }
 
 // Andamento devolve o estado atual.
@@ -97,7 +121,8 @@ func (c *Categorizador) Parar() {
 // Devolve erro quando não dá para começar — sem chave, ou já rodando. Erros durante a
 // execução ficam no andamento, e não aqui: quem chamou já foi embora quando eles acontecem.
 func (c *Categorizador) Iniciar(tipo string) error {
-	if c.tmdb == nil {
+	cli := c.cliente(context.Background())
+	if cli == nil {
 		return tmdb.ErrSemChave
 	}
 
@@ -111,11 +136,11 @@ func (c *Categorizador) Iniciar(tipo string) error {
 	c.andamento = Andamento{Rodando: true, InicioEm: time.Now()}
 	c.mu.Unlock()
 
-	go c.rodar(ctx, tipo)
+	go c.rodar(ctx, cli, tipo)
 	return nil
 }
 
-func (c *Categorizador) rodar(ctx context.Context, tipo string) {
+func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo string) {
 	defer func() {
 		c.mu.Lock()
 		agora := time.Now()
@@ -153,7 +178,7 @@ func (c *Categorizador) rodar(ctx context.Context, tipo string) {
 			if ctx.Err() != nil {
 				return
 			}
-			c.classificarUm(ctx, &lote[i], pastas)
+			c.classificarUm(ctx, cli, &lote[i], pastas)
 			time.Sleep(pausaEntreConsultas)
 		}
 
@@ -165,8 +190,8 @@ func (c *Categorizador) rodar(ctx context.Context, tipo string) {
 	}
 }
 
-func (c *Categorizador) classificarUm(ctx context.Context, item *store.SemCategoria,
-	pastas map[string]int64) {
+func (c *Categorizador) classificarUm(ctx context.Context, cli *tmdb.Cliente,
+	item *store.SemCategoria, pastas map[string]int64) {
 
 	serie := item.Tipo == store.ContentSeries
 
@@ -174,7 +199,7 @@ func (c *Categorizador) classificarUm(ctx context.Context, item *store.SemCatego
 	var err error
 	if item.TMDBID != nil && *item.TMDBID != "" {
 		// O caminho exato: a fonte já disse qual é o filme. Uma requisição, sem chute.
-		filme, err = c.tmdb.PorID(ctx, *item.TMDBID, serie)
+		filme, err = cli.PorID(ctx, *item.TMDBID, serie)
 	} else {
 		ano := 0
 		if item.Ano != nil {
@@ -182,7 +207,7 @@ func (c *Categorizador) classificarUm(ctx context.Context, item *store.SemCatego
 		}
 		// O título limpo, e não o declarado: "- 007 (1969) [DUB]" não encontra nada. A
 		// limpeza é a mesma que o resto do sistema já usa para comparar títulos.
-		filme, err = c.tmdb.Buscar(ctx, ingest.ChaveDeDuplicata(item.Titulo), ano, serie)
+		filme, err = cli.Buscar(ctx, ingest.ChaveDeDuplicata(item.Titulo), ano, serie)
 	}
 
 	if err != nil {

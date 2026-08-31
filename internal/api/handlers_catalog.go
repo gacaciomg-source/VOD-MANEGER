@@ -429,8 +429,12 @@ func (s *Server) handleAndamentoDaClassificacao(w http.ResponseWriter, r *http.R
 		s.fail(w, r, err, "contando conteúdos sem categoria")
 		return
 	}
+	// "disponivel" agora significa "o recurso existe neste processo", e "tem_chave" diz se
+	// ele pode ser usado. Separar os dois e o que permite a tela oferecer o CAMPO da chave em
+	// vez de so dizer que nao da.
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
 		"disponivel":    true,
+		"tem_chave":     s.deps.Categorizador.TemChave(r.Context()),
 		"andamento":     s.deps.Categorizador.Andamento(),
 		"sem_categoria": map[string]any{"filmes": filmes, "series": series},
 	})
@@ -439,8 +443,8 @@ func (s *Server) handleAndamentoDaClassificacao(w http.ResponseWriter, r *http.R
 func (s *Server) handleIniciarClassificacao(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Categorizador == nil {
 		writeError(w, s.deps.Log, http.StatusServiceUnavailable, "sem_tmdb",
-			"a classificação por gênero precisa de uma chave do TMDB. Crie uma gratuitamente "+
-				"em themoviedb.org, e coloque em TMDB_API_KEY no arquivo de ambiente do serviço.")
+			"a classificação por gênero precisa de uma chave do TMDB. Ela é gratuita: crie em "+
+				"themoviedb.org e cole aqui em Configurações.")
 		return
 	}
 	if err := s.deps.Categorizador.Iniciar(r.URL.Query().Get("tipo")); err != nil {
