@@ -177,7 +177,7 @@ type NewStream struct {
 	//
 	// Era um UPDATE separado logo depois do INSERT — duas idas ao banco no caminho do
 	// primeiro byte para gravar dois campos da mesma linha.
-	CacheResult  string
+	CacheResult string
 }
 
 // OpenStream registra o início de uma reprodução.
@@ -505,4 +505,45 @@ func (s *Store) VariantesDoAlvo(ctx context.Context, kind string, targetID int64
 		return s.playableVariants(ctx, TargetEpisode, targetID, 0, targetID)
 	}
 	return s.playableVariants(ctx, TargetContent, targetID, targetID, 0)
+}
+
+// PodarHistoricoDeStreams apaga reproduções antigas, em lotes.
+//
+// # Por que isto precisa existir
+//
+// A tabela de reproduções cresce e nunca encolhe. Numa operação com três mil reproduções por
+// dia, é um milhão de linhas por ano — mais sete índices sobre elas. Nada quebra de repente:
+// o Painel só vai ficando mais lento a cada mês, e o disco some sem que ninguém associe uma
+// coisa à outra.
+//
+// # Por que em lotes
+//
+// Um DELETE sobre centenas de milhares de linhas segura a tabela pelo tempo todo da operação
+// — e essa tabela recebe uma escrita por reprodução iniciada. A faxina travaria justamente o
+// que ela existe para proteger.
+//
+// Em lotes pequenos, cada um é rápido, e entre eles as reproduções passam. A faxina roda a
+// cada dez minutos, então uma poda que não terminou hoje termina na próxima volta.
+//
+// # O que nunca é apagado
+//
+// Sessões ainda ATIVAS, por mais antigas que pareçam. Uma linha ativa é uma vaga ocupada no
+// limite da credencial — apagá-la faria o contador nunca fechar. Quem lida com as abandonadas
+// é a faxina que as encerra, e só depois disso elas entram aqui.
+func (s *Store) PodarHistoricoDeStreams(ctx context.Context, reter time.Duration, lote int) (int64, error) {
+	if reter <= 0 || lote <= 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM streams
+		WHERE id IN (
+			SELECT id FROM streams
+			WHERE state <> 'active' AND started_at < now() - $1::interval
+			ORDER BY started_at
+			LIMIT $2
+		)`, reter.String(), lote)
+	if err != nil {
+		return 0, wrapErr("podando o histórico de reproduções", err)
+	}
+	return tag.RowsAffected(), nil
 }

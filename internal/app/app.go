@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"vodmanager/internal/acervo"
@@ -195,8 +196,8 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		// Sem isto, tudo que precisa falar com uma conta de nuvem pelo painel responde
 		// "este processo não gerencia o acervo" — uma mensagem que descreve um Node, e não
 		// uma dependência que ficou por ligar.
-		Nuvens: servicoAcervo,
-		Sistema:       sistema,
+		Nuvens:  servicoAcervo,
+		Sistema: sistema,
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)
 
@@ -273,6 +274,7 @@ func housekeeping(ctx context.Context, st *store.Store, authSvc *auth.Service, l
 			} else if n > 0 {
 				log.Info("sessões expiradas removidas", "quantidade", n)
 			}
+			podarHistorico(ctx, st, log)
 		}
 	}
 }
@@ -336,4 +338,41 @@ func (a acervoParaEdge) TalvezCapturar(ctx context.Context, v *store.PlayableVar
 		return nil
 	}
 	return c
+}
+
+// loteDaPoda é quantas reproduções antigas somem por rodada.
+//
+// Cinco mil. Um DELETE sobre centenas de milhares de linhas seguraria a tabela pelo tempo
+// todo da operação — e essa tabela recebe uma escrita por reprodução iniciada. A faxina
+// travaria justamente o que ela existe para proteger.
+//
+// Em lote, cada rodada é rápida e as reproduções passam entre elas. Rodando a cada dez
+// minutos, são setecentas mil linhas por dia de capacidade: mais que o suficiente para
+// alcançar qualquer atraso acumulado, e devagar o bastante para não ser sentido.
+const loteDaPoda = 5000
+
+// podarHistorico apaga reproduções antigas conforme a retenção configurada.
+//
+// Silencioso quando não há o que fazer, que é o caso normal. Só fala quando apagou algo — um
+// registro por rodada de dez minutos dizendo "nada a podar" seria ruído por anos.
+func podarHistorico(ctx context.Context, st *store.Store, log *slog.Logger) {
+	dias := 90
+	if v, err := st.GetSetting(ctx, store.SettingHistoricoDias, "90"); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dias = n
+		}
+	}
+	if dias == 0 {
+		// Zero é uma escolha legítima: guardar tudo, para quem quer o histórico inteiro.
+		return
+	}
+
+	n, err := st.PodarHistoricoDeStreams(ctx, time.Duration(dias)*24*time.Hour, loteDaPoda)
+	if err != nil {
+		log.Warn("falha ao podar o histórico de reproduções", "erro", err)
+		return
+	}
+	if n > 0 {
+		log.Info("histórico de reproduções podado", "removidas", n, "retencao_dias", dias)
+	}
 }

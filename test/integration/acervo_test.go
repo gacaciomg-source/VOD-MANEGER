@@ -877,3 +877,65 @@ func TestPrioridadeDaFonteERespeitada(t *testing.T) {
 		t.Fatalf("a de pior prioridade devia vir depois; veio %q", variantes[1].SourceName)
 	}
 }
+
+// TestPodaDoHistoricoPreservaOAtivo cobre a faxina que faltava.
+//
+// A tabela de reproduções cresce e nunca encolhia: três mil por dia são um milhão de linhas
+// por ano, mais sete índices sobre elas. Nada quebra de repente — o painel só fica mais lento
+// a cada mês, e o disco some sem que ninguém associe as duas coisas.
+//
+// A regra que a poda não pode violar: uma sessão ATIVA nunca é apagada, por mais antiga que
+// pareça. Ativa significa vaga ocupada no limite da credencial — apagá-la faria o contador
+// nunca fechar, e o cliente ficaria bloqueado por uma reprodução que não existe mais.
+func TestPodaDoHistoricoPreservaOAtivo(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	criar := func(estado string, idade time.Duration) int64 {
+		id, err := env.Store.OpenStream(ctx, store.NewStream{NodeID: "teste", ClientIP: "1.2.3.4"})
+		if err != nil {
+			t.Fatalf("OpenStream: %v", err)
+		}
+		if _, err := env.Pool.Exec(ctx,
+			`UPDATE streams SET started_at = now() - $2::interval, state = $3 WHERE id = $1`,
+			id, idade.String(), estado); err != nil {
+			t.Fatalf("envelhecendo a sessão: %v", err)
+		}
+		return id
+	}
+
+	antigaFechada := criar("closed", 100*24*time.Hour)
+	antigaAtiva := criar("active", 100*24*time.Hour)
+	recente := criar("closed", 2*24*time.Hour)
+
+	n, err := env.Store.PodarHistoricoDeStreams(ctx, 90*24*time.Hour, 1000)
+	if err != nil {
+		t.Fatalf("PodarHistoricoDeStreams: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("só a antiga FECHADA devia sair; saíram %d", n)
+	}
+
+	existe := func(id int64) bool {
+		var n int
+		if err := env.Pool.QueryRow(ctx,
+			`SELECT count(*) FROM streams WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("conferindo a sessão: %v", err)
+		}
+		return n == 1
+	}
+	if existe(antigaFechada) {
+		t.Fatal("a sessão antiga e fechada devia ter sido podada")
+	}
+	if !existe(antigaAtiva) {
+		t.Fatal("uma sessão ATIVA não pode ser podada: ela ocupa vaga no limite da credencial")
+	}
+	if !existe(recente) {
+		t.Fatal("a sessão recente está dentro da retenção e devia continuar")
+	}
+
+	// Retenção zero é uma escolha legítima — guardar tudo — e não pode virar "apague tudo".
+	if n, err := env.Store.PodarHistoricoDeStreams(ctx, 0, 1000); err != nil || n != 0 {
+		t.Fatalf("retenção zero devia não apagar nada; veio %d, %v", n, err)
+	}
+}

@@ -92,6 +92,16 @@ const (
 	// A fonte responde em mais de um segundo e corta entregas; a nuvem responde em centenas
 	// de milissegundos e nao corta. Trocar disco por nuvem aqui perde pouco e libera muito.
 	SettingCacheAdiantarNaNuvem = "cache_adiantar_na_nuvem"
+
+	// SettingHistoricoDias e por quantos dias o historico de reproducoes e guardado.
+	//
+	// A tabela cresce e nunca encolhe sozinha: tres mil reproducoes por dia sao um milhao
+	// de linhas por ano, mais sete indices sobre elas. Nada quebra de repente — o painel so
+	// fica mais lento a cada mes, e o disco some sem que ninguem associe as duas coisas.
+	//
+	// Noventa dias por padrao: e o bastante para investigar um problema do mes passado e
+	// para comparar um mes com o anterior. Zero desliga a poda, para quem quer tudo.
+	SettingHistoricoDias = "historico_dias"
 )
 
 // GetSetting lê uma configuração. Ausência não é erro: devolve o padrão.
