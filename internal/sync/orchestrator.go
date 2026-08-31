@@ -1027,6 +1027,17 @@ func (o *Orchestrator) TestSource(ctx context.Context, sourceID int64) error {
 		return err
 	}
 	cfg.Timeout = 20 * time.Second
+
+	// A validade da assinatura, gravada de passagem.
+	//
+	// Aproveita a mesma requisição que o Probe faria: o player_api devolve autenticação e
+	// vencimento juntos, e ler os dois custa o mesmo que ler um.
+	//
+	// Um erro aqui não interrompe o teste — a fonte pode estar boa e apenas não informar
+	// validade. O que não pode acontecer é a informação existir e ninguém a olhar, que era
+	// exatamente o caso antes.
+	o.anotarAssinatura(ctx, src.ID, provider, cfg)
+
 	return provider.Probe(ctx, cfg)
 }
 
@@ -1056,4 +1067,41 @@ func candidatoDoBanco(c store.ContentCandidate) ingest.MatchCandidate {
 		mc.IMDBID = *c.IMDBID
 	}
 	return mc
+}
+
+// leitorDeAssinatura é o provider que sabe informar a validade da conta.
+//
+// Interface opcional: fontes M3U simples não têm o conceito, e exigir o método de todas
+// obrigaria a escrever implementações vazias — que é como uma interface começa a mentir.
+type leitorDeAssinatura interface {
+	Assinatura(ctx context.Context, cfg sources.Config) (sources.Assinatura, error)
+}
+
+// anotarAssinatura guarda o que a fonte informa sobre a própria validade.
+//
+// Silencioso quando a fonte não informa nada, que é o caso legítimo de listas M3U e de contas
+// sem prazo. O que ele impede é o caso oposto: a informação existir, a fonte estar vencida, e
+// o sistema seguir tentando por dias sem que nada aponte a causa.
+func (o *Orchestrator) anotarAssinatura(ctx context.Context, sourceID int64,
+	provider sources.Provider, cfg sources.Config) {
+
+	leitor, ok := provider.(leitorDeAssinatura)
+	if !ok {
+		return
+	}
+	a, err := leitor.Assinatura(ctx, cfg)
+	if err != nil {
+		// Não é falha da fonte nem do teste: pode ser um painel que não devolve user_info.
+		// Registrar sem interromper mantém o teste de conexão respondendo o que ele promete.
+		o.log.Debug("não foi possível ler a validade da fonte", "source_id", sourceID, "erro", err)
+		return
+	}
+	if err := o.store.AnotarAssinaturaDaFonte(ctx, sourceID, a.Expira, a.Status); err != nil {
+		o.log.Warn("falha ao anotar a validade da fonte", "source_id", sourceID, "erro", err)
+		return
+	}
+	if a.Vencida {
+		o.log.Warn("a assinatura nesta fonte está vencida; ela responde, mas entrega avisos "+
+			"no lugar dos vídeos", "source_id", sourceID, "status", a.Status, "expira", a.Expira)
+	}
 }

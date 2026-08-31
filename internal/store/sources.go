@@ -45,8 +45,17 @@ type Source struct {
 	LastSyncAt      *time.Time `json:"last_sync_at"`
 	LastSuccessAt   *time.Time `json:"last_success_at"`
 	HasCredentials  bool       `json:"has_credentials"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// AssinaturaExpiraEm é quando a assinatura NESTA fonte vence, conforme ela informa.
+	//
+	// Nulo significa "não informado", e é legítimo: contas sem prazo existem, e fontes M3U
+	// simples não dizem nada a respeito.
+	AssinaturaExpiraEm *time.Time `json:"assinatura_expira_em"`
+	AssinaturaStatus   string     `json:"assinatura_status"`
+	// AssinaturaVistaEm diz quando isto foi lido. Sem ele, um vencimento antigo e um recente
+	// pareceriam a mesma informação — e o antigo pode já ter sido renovado.
+	AssinaturaVistaEm *time.Time `json:"assinatura_vista_em"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // NewSource são os campos aceitos na criação.
@@ -90,6 +99,7 @@ const sourceColumns = `
 	s.allowed_categories, s.ignored_categories, s.cache_habilitado,
 	s.last_sync_at, s.last_success_at,
 	EXISTS (SELECT 1 FROM source_credentials c WHERE c.source_id = s.id) AS has_credentials,
+	s.assinatura_expira_em, s.assinatura_status, s.assinatura_vista_em,
 	s.created_at, s.updated_at`
 
 // CreateSource insere uma fonte, aplicando os padrões do schema quando o campo é nulo.
@@ -235,6 +245,7 @@ func scanSource(row rowScanner) (*Source, error) {
 		&s.MaxConcurrentDownloads, &s.MaxBandwidthBPS, &s.RequestBudget, &s.MissingTolerance,
 		&s.AllowedCategories,
 		&s.IgnoredCategories, &s.CacheHabilitado, &s.LastSyncAt, &s.LastSuccessAt, &s.HasCredentials,
+		&s.AssinaturaExpiraEm, &s.AssinaturaStatus, &s.AssinaturaVistaEm,
 		&s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -245,4 +256,17 @@ func scanSource(row rowScanner) (*Source, error) {
 		s.IgnoredCategories = []string{}
 	}
 	return &s, nil
+}
+
+// AnotarAssinaturaDaFonte guarda o que a fonte informou sobre a própria assinatura.
+//
+// Chamada a cada sincronização, porque a resposta muda: uma conta renovada volta a ter data
+// futura, e o aviso precisa sumir sozinho quando o problema for resolvido — sem obrigar
+// ninguém a limpá-lo à mão.
+func (s *Store) AnotarAssinaturaDaFonte(ctx context.Context, id int64, expira *time.Time, status string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE sources
+		SET assinatura_expira_em = $2, assinatura_status = $3, assinatura_vista_em = now()
+		WHERE id = $1`, id, expira, status)
+	return wrapErr("anotando a validade da fonte", err)
 }

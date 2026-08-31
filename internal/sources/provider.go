@@ -134,3 +134,16 @@ type StreamTarget struct {
 
 // ErrBudgetExceeded sinaliza que o teto de requisições foi atingido.
 var ErrBudgetExceeded = fmt.Errorf("teto de requisições da fonte atingido")
+
+// Assinatura descreve o contrato que temos com uma fonte.
+//
+// Vive aqui, e não no transporte, porque é vocabulário compartilhado: quem lê é a
+// sincronização, quem preenche é o provider, e nenhum dos dois deve depender do outro.
+//
+// Expira nulo é legítimo e comum: listas M3U não têm o conceito, e contas sem prazo existem.
+// "Não informado" não é "vencida".
+type Assinatura struct {
+	Status  string
+	Expira  *time.Time
+	Vencida bool
+}

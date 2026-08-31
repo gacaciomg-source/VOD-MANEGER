@@ -300,3 +300,44 @@ func vencimentoXtream(bruto json.RawMessage) (time.Time, bool) {
 	}
 	return time.Unix(segundos, 0), true
 }
+
+// Assinatura lê a validade da conta na fonte, sem tocar em vídeo.
+//
+// # Por que existe além do Probe
+//
+// O Probe responde sim ou não: dá para usar esta fonte agora? Esta responde outra coisa —
+// ATÉ QUANDO dá. E é essa a pergunta que permite avisar antes, em vez de descobrir com os
+// clientes reclamando de conteúdo que não abre.
+//
+// Uma fonte vencida não falha: ela aceita a conexão, responde 200 e entrega, no lugar de cada
+// filme, um aviso de dois quilobytes. Sem esta leitura, nada no sistema distingue isso de uma
+// operação normal.
+func (p *XtreamProvider) Assinatura(ctx context.Context, cfg sources.Config) (sources.Assinatura, error) {
+	client := NewClient(cfg.Timeout, 1, cfg.UserAgent)
+	dados, err := client.Get(ctx, p.apiURL(cfg, ""))
+	if err != nil {
+		return sources.Assinatura{}, err
+	}
+
+	var resposta struct {
+		UserInfo struct {
+			Status  string          `json:"status"`
+			ExpDate json.RawMessage `json:"exp_date"`
+		} `json:"user_info"`
+	}
+	if err := json.Unmarshal(dados, &resposta); err != nil {
+		return sources.Assinatura{}, fmt.Errorf("xtream: resposta de autenticação inesperada")
+	}
+
+	a := sources.Assinatura{Status: strings.TrimSpace(resposta.UserInfo.Status)}
+	if venc, ok := vencimentoXtream(resposta.UserInfo.ExpDate); ok {
+		a.Expira = &venc
+		a.Vencida = time.Now().After(venc)
+	}
+	// O status também vence a conta, mesmo sem data: alguns painéis dizem "Expired" e não
+	// mandam exp_date nenhum.
+	if st := strings.ToLower(a.Status); st != "" && st != "active" {
+		a.Vencida = true
+	}
+	return a, nil
+}

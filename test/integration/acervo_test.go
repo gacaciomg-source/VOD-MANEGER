@@ -1003,3 +1003,56 @@ func TestFilaDaClassificacaoExecuta(t *testing.T) {
 		t.Fatal("a classificação sobrepôs uma pasta já definida — decisão humana foi perdida")
 	}
 }
+
+// TestValidadeDaFonteEGuardada cobre o registro que faltava.
+//
+// Uma fonte vencida NÃO falha: ela aceita a conexão, responde 200 e entrega, no lugar de cada
+// filme, um aviso de dois quilobytes. Do lado do sistema tudo parece normal — e custou um dia
+// inteiro de conteúdo quebrado antes de alguém descobrir.
+//
+// A informação estava disponível o tempo todo, na resposta da própria fonte. O que faltava
+// era guardá-la.
+func TestValidadeDaFonteEGuardada(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	var id int64
+	if err := env.Pool.QueryRow(ctx, `
+		INSERT INTO sources (name, kind, base_url, priority, enabled)
+		VALUES ('fonte com prazo', 'xtream', 'http://exemplo.tld', 1, true)
+		RETURNING id`).Scan(&id); err != nil {
+		t.Fatalf("criando a fonte: %v", err)
+	}
+
+	venc := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	if err := env.Store.AnotarAssinaturaDaFonte(ctx, id, &venc, "Active"); err != nil {
+		t.Fatalf("AnotarAssinaturaDaFonte: %v", err)
+	}
+
+	src, err := env.Store.GetSource(ctx, id)
+	if err != nil {
+		t.Fatalf("GetSource: %v", err)
+	}
+	if src.AssinaturaExpiraEm == nil || !src.AssinaturaExpiraEm.Truncate(time.Second).Equal(venc) {
+		t.Fatalf("o vencimento devia ter sido guardado; veio %v", src.AssinaturaExpiraEm)
+	}
+	if src.AssinaturaStatus != "Active" {
+		t.Fatalf("o status devia ser Active; veio %q", src.AssinaturaStatus)
+	}
+	if src.AssinaturaVistaEm == nil {
+		t.Fatal("sem a data da leitura não há como saber se a informação está velha")
+	}
+
+	// Uma conta renovada volta a ter data futura, e o aviso precisa sumir SOZINHO — sem
+	// obrigar ninguém a limpá-lo à mão depois de resolver o problema.
+	if err := env.Store.AnotarAssinaturaDaFonte(ctx, id, nil, ""); err != nil {
+		t.Fatalf("AnotarAssinaturaDaFonte limpando: %v", err)
+	}
+	src, err = env.Store.GetSource(ctx, id)
+	if err != nil {
+		t.Fatalf("GetSource: %v", err)
+	}
+	if src.AssinaturaExpiraEm != nil {
+		t.Fatal("sem data informada, o campo precisa voltar a ser nulo")
+	}
+}

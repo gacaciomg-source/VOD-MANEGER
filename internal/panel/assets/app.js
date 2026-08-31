@@ -494,6 +494,8 @@ async function verFontes() {
   }
 
   $('#visao').innerHTML = `
+    ${avisoDeAssinatura(sources)}
+
     <p class="discreto" style="margin:0 0 14px">
       Arraste as linhas para mudar a prioridade. A ordem define qual fonte é tentada primeiro.
     </p>
@@ -5259,5 +5261,57 @@ function cartaoDeClassificacao(c, tipo) {
       <button class="btn btn-primario" id="classificar" data-tipo="${tipo}">
         Organizar por gênero
       </button>
+    </div>`;
+}
+
+/**
+ * O aviso de assinatura vencida (ou perto de vencer).
+ *
+ * Uma fonte vencida NÃO falha: ela aceita a conexão, responde 200 e entrega, no lugar de cada
+ * filme, um aviso de dois quilobytes. Do lado do sistema tudo parece normal; do lado de quem
+ * assiste, todo conteúdo daquela fonte abre com zero segundos.
+ *
+ * Custou um dia inteiro de conteúdo quebrado antes de alguém descobrir — e a informação
+ * estava disponível o tempo todo, na resposta da própria fonte.
+ *
+ * Sete dias de antecedência: tempo de renovar sem pressa, e curto o bastante para o aviso não
+ * virar paisagem. Um alerta que fica meses na tela deixa de ser lido.
+ */
+function avisoDeAssinatura(fontes) {
+  const lista = (Array.isArray(fontes) ? fontes : []).filter(f => f.assinatura_expira_em);
+  if (!lista.length) return '';
+
+  const agora = Date.now();
+  const seteDias = 7 * 24 * 60 * 60 * 1000;
+
+  const vencidas = [];
+  const vencendo = [];
+  for (const f of lista) {
+    const quando = new Date(f.assinatura_expira_em).getTime();
+    if (isNaN(quando)) continue;
+    if (quando <= agora) vencidas.push({ f, quando });
+    else if (quando - agora <= seteDias) vencendo.push({ f, quando });
+  }
+  if (!vencidas.length && !vencendo.length) return '';
+
+  const dia = ms => new Date(ms).toLocaleDateString('pt-BR');
+  const nomes = arr => arr.map(({ f, quando }) =>
+    `<b>${esc(f.name)}</b> (${dia(quando)})`).join(', ');
+
+  return `
+    <div class="cartao" style="margin-top:0">
+      ${vencidas.length ? `
+        <div class="veredito erro" style="margin:0 0 ${vencendo.length ? '10px' : '0'}">
+          <b>Assinatura vencida: ${nomes(vencidas)}.</b>
+          <br><br>
+          Uma fonte vencida não para de responder — ela entrega um aviso no lugar de cada
+          filme. Todo conteúdo dela abre com zero segundos, e nada mais no sistema acusa isso.
+          Renove na fonte e use <b>Testar</b> para o aviso sumir.
+        </div>` : ''}
+      ${vencendo.length ? `
+        <div class="veredito alerta" style="margin:0">
+          <b>Vence em breve: ${nomes(vencendo)}.</b>
+          Renove antes da data para não haver um dia de conteúdo quebrado.
+        </div>` : ''}
     </div>`;
 }
