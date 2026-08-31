@@ -58,6 +58,9 @@ type Deps struct {
 	// precisa aqui e falar com uma conta ja cadastrada. Passar o servico completo daria
 	// ao plano de controle acesso a decisoes de guarda e limpeza que nao sao dele.
 	Nuvens MontadorDeNuvens
+	// Categorizador classifica conteudos por genero via TMDB. Nulo quando nao ha chave —
+	// e nulo e um estado legitimo: o sistema inteiro funciona sem o recurso.
+	Categorizador *vsync.Categorizador
 	// Sistema mede o consumo de recursos da máquina. Nulo desliga a tela de sistema em
 	// vez de derrubar o processo.
 	Sistema *sysinfo.Coletor
@@ -153,6 +156,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/system/migracao", s.handleMigracaoStatus)
 			r.Get("/falhas", s.handleFalhas)
 			r.Get("/acervo/estimativa", s.handleEstimativaDeArmazenamento)
+			r.Get("/catalogo/classificacao", s.handleAndamentoDaClassificacao)
 			r.Get("/trafego", s.handleTrafego)
 
 			// Acervo: o que esta operação guarda, e onde.
@@ -201,6 +205,8 @@ func (s *Server) routes() chi.Router {
 					r.Post("/acervo/limpar-invalidas", s.handleLimparInvalidas)
 					r.Post("/acervo/esvaziar", s.handleEsvaziarAcervo)
 					r.Post("/duplicatas/unir-tudo", s.handleUnirTodasDuplicatas)
+					r.Post("/catalogo/classificacao", s.handleIniciarClassificacao)
+					r.Delete("/catalogo/classificacao", s.handlePararClassificacao)
 					r.Post("/nuvens/{id}/pasta", s.handleOrganizarNuvem)
 					r.Post("/nuvens/{id}/esvaziar", s.handleEsvaziarNuvem)
 					r.Patch("/nuvens/{id}", s.handleAjustarNuvem)

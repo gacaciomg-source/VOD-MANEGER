@@ -74,6 +74,15 @@ type Config struct {
 	// 0 usa o padrao (20 MB). -1 desliga a deteccao.
 	VideoMinimoMB int
 
+	// TMDBAPIKey habilita a classificacao automatica por genero.
+	//
+	// Vazia desliga o recurso, e isso e um estado legitimo: o sistema inteiro funciona sem
+	// ele. Fica em variavel de ambiente, e nao no banco, porque e credencial de terceiro —
+	// o mesmo tratamento que a chave mestra recebe.
+	TMDBAPIKey string
+	// TMDBIdioma escolhe em que lingua os generos vem. As pastas herdam esse nome.
+	TMDBIdioma string
+
 	// Bootstrap do primeiro administrador
 	BootstrapAdminUsername string
 	BootstrapAdminPassword string
@@ -111,6 +120,8 @@ func LoadFrom(get Getenv) (*Config, error) {
 		PublicBaseURL:    l.str("PUBLIC_BASE_URL", ""),
 
 		ArmazenamentoLocal:     l.str("ARMAZENAMENTO_LOCAL", "/opt/vodmanager/acervo"),
+		TMDBAPIKey:             l.str("TMDB_API_KEY", ""),
+		TMDBIdioma:             l.str("TMDB_IDIOMA", "pt-BR"),
 		ArmazenamentoReservaGB: l.intRange("ARMAZENAMENTO_RESERVA_GB", 5, 0, 100000),
 		VideoMinimoMB:          l.intRange("VIDEO_MINIMO_MB", 0, -1, 100000),
 
@@ -153,6 +164,9 @@ func (c *Config) Redacted() map[string]any {
 		"log_level":       c.LogLevel.String(),
 		"log_format":      c.LogFormat,
 		"metrics_enabled": c.MetricsEnabled,
+		// A chave em si NUNCA sai daqui — so se ela existe, que e o que explica o recurso
+		// estar ligado ou nao.
+		"tmdb": c.TMDBAPIKey != "",
 	}
 }
 

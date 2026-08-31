@@ -413,3 +413,47 @@ func (s *Server) handleVariantOriginURL(w http.ResponseWriter, r *http.Request) 
 		"origin_url": url,
 	})
 }
+
+// handleClassificarPorGenero começa (ou consulta) a classificação automática.
+//
+// GET devolve o andamento; POST começa; DELETE interrompe. Três verbos no mesmo lugar porque
+// são três perguntas sobre a MESMA coisa, e separá-las em três endereços faria a tela ter de
+// saber qual usar quando.
+func (s *Server) handleAndamentoDaClassificacao(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Categorizador == nil {
+		writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"disponivel": false})
+		return
+	}
+	filmes, series, err := s.deps.Store.ContarSemCategoria(r.Context())
+	if err != nil {
+		s.fail(w, r, err, "contando conteúdos sem categoria")
+		return
+	}
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
+		"disponivel":    true,
+		"andamento":     s.deps.Categorizador.Andamento(),
+		"sem_categoria": map[string]any{"filmes": filmes, "series": series},
+	})
+}
+
+func (s *Server) handleIniciarClassificacao(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Categorizador == nil {
+		writeError(w, s.deps.Log, http.StatusServiceUnavailable, "sem_tmdb",
+			"a classificação por gênero precisa de uma chave do TMDB. Crie uma gratuitamente "+
+				"em themoviedb.org, e coloque em TMDB_API_KEY no arquivo de ambiente do serviço.")
+		return
+	}
+	if err := s.deps.Categorizador.Iniciar(r.URL.Query().Get("tipo")); err != nil {
+		writeError(w, s.deps.Log, http.StatusConflict, "nao_pode_iniciar", err.Error())
+		return
+	}
+	s.logEvent(r, "catalogo", "info", "classificação por gênero iniciada", actorOf(r), nil)
+	writeJSON(w, s.deps.Log, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePararClassificacao(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Categorizador != nil {
+		s.deps.Categorizador.Parar()
+	}
+	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"ok": true})
+}

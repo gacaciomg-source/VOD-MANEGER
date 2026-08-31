@@ -939,3 +939,67 @@ func TestPodaDoHistoricoPreservaOAtivo(t *testing.T) {
 		t.Fatalf("retenção zero devia não apagar nada; veio %d, %v", n, err)
 	}
 }
+
+// TestFilaDaClassificacaoExecuta cobre as consultas da classificação por gênero.
+//
+// Só entram títulos SEM pasta, e a classificação nunca sobrepõe uma decisão humana: quem
+// organizou à mão organizou por um motivo, e um robô que passa por cima disso é pior que um
+// robô que não passa.
+func TestFilaDaClassificacaoExecuta(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	semPasta, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Sem Pasta", NormalizedTitle: "sem pasta",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	comPasta, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Com Pasta", NormalizedTitle: "com pasta",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+
+	pasta, err := env.Store.CriarPrincipal(ctx, "Ação", "acao", store.ContentMovie)
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, pasta); err != nil {
+		t.Fatalf("DefinirCategoriaDoConteudo: %v", err)
+	}
+
+	fila, err := env.Store.ConteudosSemCategoria(ctx, store.ContentMovie, 100)
+	if err != nil {
+		t.Fatalf("ConteudosSemCategoria: %v", err)
+	}
+	if len(fila) != 1 || fila[0].ID != semPasta.ID {
+		t.Fatalf("a fila devia ter só o título sem pasta; veio %d item(ns)", len(fila))
+	}
+
+	filmes, _, err := env.Store.ContarSemCategoria(ctx)
+	if err != nil {
+		t.Fatalf("ContarSemCategoria: %v", err)
+	}
+	if filmes != 1 {
+		t.Fatalf("a contagem devia ser 1; veio %d", filmes)
+	}
+
+	// A regra que protege o trabalho humano: um título que JÁ tem pasta não muda de lugar.
+	outra, err := env.Store.CriarPrincipal(ctx, "Comédia", "comedia", store.ContentMovie)
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, outra); err != nil {
+		t.Fatalf("DefinirCategoriaDoConteudo: %v", err)
+	}
+	var atual int64
+	if err := env.Pool.QueryRow(ctx,
+		`SELECT category_id FROM contents WHERE id = $1`, comPasta.ID).Scan(&atual); err != nil {
+		t.Fatalf("lendo a categoria: %v", err)
+	}
+	if atual != pasta {
+		t.Fatal("a classificação sobrepôs uma pasta já definida — decisão humana foi perdida")
+	}
+}

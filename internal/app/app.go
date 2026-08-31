@@ -31,6 +31,7 @@ import (
 	"vodmanager/internal/store"
 	vsync "vodmanager/internal/sync"
 	"vodmanager/internal/sysinfo"
+	"vodmanager/internal/tmdb"
 	"vodmanager/internal/transport"
 )
 
@@ -112,6 +113,20 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			NodeID: cfg.NodeID,
 		})
 		scheduler = vsync.NewScheduler(orch, log)
+	}
+
+	// Classificacao por genero: opcional, e nula sem chave do TMDB.
+	//
+	// Nula e um estado legitimo, nao uma falha: o sistema inteiro funciona sem ela, e derrubar
+	// o servico porque falta uma chave de um servico de terceiros seria trocar um recurso a
+	// menos por uma operacao fora do ar.
+	var categorizador *vsync.Categorizador
+	if ehManager {
+		cliente := tmdb.Novo(cfg.TMDBAPIKey, cfg.TMDBIdioma)
+		categorizador = vsync.NovoCategorizador(st, cliente, log)
+		if cliente == nil {
+			log.Info("classificação por gênero desligada: sem TMDB_API_KEY")
+		}
 	}
 
 	// Medição de recursos da máquina: alimenta a tela de sistema do painel.
@@ -196,8 +211,9 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		// Sem isto, tudo que precisa falar com uma conta de nuvem pelo painel responde
 		// "este processo não gerencia o acervo" — uma mensagem que descreve um Node, e não
 		// uma dependência que ficou por ligar.
-		Nuvens:  servicoAcervo,
-		Sistema: sistema,
+		Nuvens:        servicoAcervo,
+		Categorizador: categorizador,
+		Sistema:       sistema,
 	})
 	apiModule := api.NewModule(server, cfg.HTTPAddr, cfg.ShutdownTimeout, log)
 

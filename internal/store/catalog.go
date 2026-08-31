@@ -648,3 +648,69 @@ func (s *Store) CountUnresolved(ctx context.Context) (int64, error) {
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM unresolved_items WHERE resolved_at IS NULL`).Scan(&n)
 	return n, wrapErr("contando não resolvidos", err)
 }
+
+// SemCategoria é um conteúdo esperando classificação.
+type SemCategoria struct {
+	ID     int64
+	Tipo   string
+	Titulo string
+	Ano    *int
+	TMDBID *string
+}
+
+// ConteudosSemCategoria lista o que está sem pasta.
+//
+// É a fila da classificação automática. Numa instalação com quatro fontes que declaram tudo
+// como "Filmes", isso são milhares de títulos numa pasta só — impossível de navegar, e a
+// razão de existir a classificação por gênero.
+//
+// Ordenado por id para a retomada ser previsível: uma passagem interrompida na metade
+// continua de onde parou em vez de reprocessar o começo.
+func (s *Store) ConteudosSemCategoria(ctx context.Context, tipo string, limite int) ([]SemCategoria, error) {
+	if limite <= 0 || limite > 5000 {
+		limite = 500
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, type, title, year, tmdb_id
+		FROM contents
+		WHERE status = 'active' AND category_id IS NULL
+		  AND ($1 = '' OR type = $1)
+		ORDER BY id
+		LIMIT $2`, tipo, limite)
+	if err != nil {
+		return nil, wrapErr("listando conteúdos sem categoria", err)
+	}
+	defer rows.Close()
+
+	out := []SemCategoria{}
+	for rows.Next() {
+		var c SemCategoria
+		if err := rows.Scan(&c.ID, &c.Tipo, &c.Titulo, &c.Ano, &c.TMDBID); err != nil {
+			return nil, wrapErr("listando conteúdos sem categoria", err)
+		}
+		out = append(out, c)
+	}
+	return out, wrapErr("listando conteúdos sem categoria", rows.Err())
+}
+
+// ContarSemCategoria diz quantos títulos esperam classificação.
+func (s *Store) ContarSemCategoria(ctx context.Context) (filmes, series int64, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE type = 'movie'),
+		       count(*) FILTER (WHERE type = 'series')
+		FROM contents
+		WHERE status = 'active' AND category_id IS NULL`).Scan(&filmes, &series)
+	return filmes, series, wrapErr("contando conteúdos sem categoria", err)
+}
+
+// DefinirCategoriaDoConteudo põe um título numa pasta.
+//
+// Só quando ele ainda não tem: a classificação automática nunca sobrepõe uma decisão humana.
+// Quem organizou à mão organizou por um motivo, e um robô que passa por cima disso é pior que
+// um robô que não passa.
+func (s *Store) DefinirCategoriaDoConteudo(ctx context.Context, id, categoria int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE contents SET category_id = $2, updated_at = now()
+		WHERE id = $1 AND category_id IS NULL`, id, categoria)
+	return wrapErr("definindo a categoria do conteúdo", err)
+}

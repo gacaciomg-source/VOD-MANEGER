@@ -1403,10 +1403,13 @@ async function recarregarCategorias() {
 }
 
 async function verCategorias() {
-  const [{ categories }, { pendencias }, { apelidos }] = await Promise.all([
+  const [{ categories }, { pendencias }, { apelidos }, classificacao] = await Promise.all([
     api('/categories'),
     api('/categorias/pendencias'),
     api('/categorias/apelidos'),
+    // Informativo: se falhar, a tela abre igual. A classificação é um recurso opcional, e
+    // não pode derrubar a tela que existe para organizar categorias à mão.
+    api('/catalogo/classificacao').catch(() => null),
   ]);
 
   const tipo = estadoCategorias.tipo;
@@ -1446,6 +1449,8 @@ async function verCategorias() {
       que você ainda vai cadastrar. É o que faz a decisão valer para sempre, e o que impede
       a categoria de voltar como pendência na próxima sincronização.
     </p>
+
+    ${cartaoDeClassificacao(classificacao, tipo)}
 
     <div class="abas">
       ${aba('movie', 'Filmes')}
@@ -1602,6 +1607,38 @@ async function verCategorias() {
   });
 
   // Filtro por nome, aplicado sobre o que já está desenhado.
+  const classificar = $('#classificar');
+  if (classificar) classificar.onclick = async () => {
+    classificar.disabled = true;
+    try {
+      await api(`/catalogo/classificacao?tipo=${classificar.dataset.tipo}`, { method: 'POST' });
+      aviso('Classificação iniciada. Ela continua mesmo se você fechar esta tela.', 'ok');
+      verCategorias();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      classificar.disabled = false;
+    }
+  };
+
+  const parar = $('#parar-classificacao');
+  if (parar) parar.onclick = async () => {
+    parar.disabled = true;
+    try {
+      await api('/catalogo/classificacao', { method: 'DELETE' });
+      aviso('Classificação interrompida. O que já foi organizado permanece.', 'ok');
+      verCategorias();
+    } catch (err) {
+      aviso('Falha: ' + err.message, 'erro');
+      parar.disabled = false;
+    }
+  };
+
+  // Enquanto classifica, a tela acompanha. Só nesse caso: uma tela parada redesenhada a cada
+  // cinco segundos pisca à toa e atrapalha quem está organizando à mão.
+  if (classificacao && classificacao.andamento && classificacao.andamento.rodando) {
+    agendarAtualizacao('categorias', 5000);
+  }
+
   const busca = $('#cat-busca');
   const aplicarFiltro = () => {
     const termo = busca.value.trim().toLowerCase();
@@ -5091,5 +5128,79 @@ function cartaoDeEstimativa(e) {
           <td class="numero"><b>${formatarBytes(e.total_bytes)}</b></td>
         </tr></tfoot>
       </table></div>
+    </div>`;
+}
+
+/**
+ * A classificação automática por gênero.
+ *
+ * Uma fonte de IPTV entrega o filme e o nome do filme — não o gênero. A "categoria" que ela
+ * declara é a pasta que AQUELA fonte escolheu, e muitas vezes é só "Filmes". O resultado é
+ * um acervo com milhares de títulos numa pasta só.
+ *
+ * O TMDB sabe o gênero de praticamente todo filme lançado. É informação catalogada por
+ * gente, e não deduzida do nome — que é a diferença entre organizar e adivinhar.
+ */
+function cartaoDeClassificacao(c, tipo) {
+  if (!c) return '';
+
+  if (!c.disponivel) {
+    return `
+      <div class="cartao" style="margin-top:0">
+        <h2>Organizar por gênero, automaticamente</h2>
+        <p class="discreto" style="margin:0">
+          Precisa de uma chave do <b>TMDB</b>, que é gratuita: crie em
+          <span class="mono">themoviedb.org</span> e coloque em
+          <span class="mono">TMDB_API_KEY</span> no arquivo de ambiente do serviço.
+          <br>
+          Com ela, o sistema consulta o gênero de cada título e cria as pastas sozinho —
+          resolvendo de uma vez a pasta única com milhares de filmes dentro.
+        </p>
+      </div>`;
+  }
+
+  const a = c.andamento || {};
+  const faltam = tipo === 'series' ? c.sem_categoria.series : c.sem_categoria.filmes;
+
+  if (a.rodando) {
+    const pct = a.processados > 0
+      ? Math.round((a.classificados / a.processados) * 100) : 0;
+    return `
+      <div class="cartao" style="margin-top:0">
+        <h2>Classificando por gênero…</h2>
+        <p class="discreto" style="margin:0 0 10px">
+          <b>${num(a.processados)}</b> processado(s) ·
+          <b>${num(a.classificados)}</b> classificado(s) (${pct}%) ·
+          ${num(a.sem_resultado)} sem resultado no TMDB
+          ${a.falhas ? ` · <span style="color:var(--erro)">${num(a.falhas)} falha(s)</span>` : ''}
+        </p>
+        <p class="dica" style="margin:0 0 10px">
+          Vai devagar de propósito: cada título é uma consulta a um serviço gratuito de
+          terceiros, e correr é o caminho para levar bloqueio. Pode fechar esta tela — o
+          trabalho continua.
+        </p>
+        <button class="btn btn-mini" id="parar-classificacao">Parar</button>
+      </div>`;
+  }
+
+  if (!faltam) {
+    return '';
+  }
+
+  return `
+    <div class="cartao" style="margin-top:0">
+      <h2>${num(faltam)} título(s) sem pasta</h2>
+      <p class="discreto" style="margin:0 0 10px">
+        A fonte entrega o filme, mas não o gênero — por isso eles caem todos juntos. O TMDB
+        sabe o gênero de praticamente todo filme lançado, e a partir dele o sistema cria as
+        pastas e distribui os títulos.
+        <br>
+        <b>Nada que você já organizou é tocado:</b> só entram os que estão sem pasta.
+        ${a.processados ? `<br>Última passagem: ${num(a.classificados)} classificado(s), ` +
+          `${num(a.sem_resultado)} sem resultado.` : ''}
+      </p>
+      <button class="btn btn-primario" id="classificar" data-tipo="${tipo}">
+        Organizar por gênero
+      </button>
     </div>`;
 }
