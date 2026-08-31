@@ -224,3 +224,123 @@ func copiarComContexto(ctx context.Context, destino io.Writer, origem io.Reader)
 		}
 	}
 }
+
+// ParcialDe informa quantos bytes de uma cópia interrompida já estão no disco.
+//
+// Zero quando não há nada — que é o caso normal, e não é erro.
+//
+// Existe para a retomada: as fontes deste sistema cortam a entrega no meio o tempo todo, e
+// recomeçar um filme de dois gigabytes do zero a cada corte gasta a banda que o cache existe
+// para economizar.
+func (l *Local) ParcialDe(sugestao string) int64 {
+	info, err := os.Stat(filepath.Join(l.raiz, nomeEstavel(sugestao)+".parcial"))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// DescartarParcial apaga uma cópia interrompida.
+//
+// Chamada quando a retomada não é possível — a fonte ignorou a faixa, ou o arquivo mudou de
+// tamanho. Continuar sobre bytes que não correspondem produziria um vídeo corrompido que
+// PARECE completo, e essa é a única falha aqui que ninguém descobriria.
+func (l *Local) DescartarParcial(sugestao string) {
+	_ = os.Remove(filepath.Join(l.raiz, nomeEstavel(sugestao)+".parcial"))
+}
+
+// Continuar acrescenta ao parcial existente e finaliza quando o total for atingido.
+//
+// # Por que uma função separada de Guardar
+//
+// Guardar sempre começa do zero — é o que se quer na maioria das vezes, e misturar os dois
+// numa função só faria "começar de novo" e "continuar" dependerem de um parâmetro que alguém
+// vai errar. Aqui a intenção está no nome.
+//
+// O arquivo temporário é o MESMO da gravação normal, e é isso que permite alternar entre os
+// dois caminhos sem conversão: uma cópia começada por Guardar é continuada por Continuar.
+func (l *Local) Continuar(ctx context.Context, sugestao string, conteudo io.Reader,
+	bytesEsperados, jaGravados int64) (Localizacao, error) {
+
+	if bytesEsperados > 0 {
+		esp, err := l.Espaco(ctx)
+		if err == nil && !esp.Ilimitado && esp.Livre < bytesEsperados-jaGravados {
+			return Localizacao{}, fmt.Errorf("%w: faltam %d bytes, há %d livres",
+				ErrSemEspaco, bytesEsperados-jaGravados, esp.Livre)
+		}
+	}
+
+	// Nome ESTAVEL, e nao aleatorio: a retomada precisa reencontrar o parcial que a
+	// tentativa anterior deixou, e um sufixo aleatorio o esconderia dela mesma.
+	nome := nomeEstavel(sugestao)
+	caminho := filepath.Join(l.raiz, nome)
+	parcial := caminho + ".parcial"
+
+	f, err := os.OpenFile(parcial, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return Localizacao{}, fmt.Errorf("armazenamento local: continuando %s: %w", parcial, err)
+	}
+
+	escritos, err := copiarComContexto(ctx, f, conteudo)
+	fecharErr := f.Close()
+	if err == nil {
+		err = fecharErr
+	}
+	total := jaGravados + escritos
+
+	if err != nil {
+		// O parcial FICA, ao contrário do Guardar. É exatamente o que torna a retomada
+		// possível: o próximo trabalhador continua daqui em vez de recomeçar.
+		if errors.Is(err, syscall.ENOSPC) {
+			return Localizacao{}, fmt.Errorf("%w: %v", ErrSemEspaco, err)
+		}
+		return Localizacao{}, fmt.Errorf("armazenamento local: gravando %s: %w", nome, err)
+	}
+
+	if err := os.Rename(parcial, caminho); err != nil {
+		return Localizacao{}, fmt.Errorf("armazenamento local: finalizando %s: %w", nome, err)
+	}
+	return Localizacao{Localizador: nome, Bytes: total}, nil
+}
+
+// nomeEstavel produz o mesmo nome toda vez, para a mesma sugestão.
+//
+// `nomeSeguro` acrescenta um sufixo aleatório, e por um bom motivo: dois filmes com o mesmo
+// título não podem virar o mesmo arquivo. Mas isso torna o nome IMPREVISÍVEL — e a retomada
+// precisa reencontrar o parcial que a tentativa anterior deixou.
+//
+// Aqui a unicidade vem de fora: quem chama põe o id do registro na sugestão, e ele já é único
+// por construção. O que sobra para esta função é limpar o que não pode ir para um nome de
+// arquivo, de forma determinística.
+func nomeEstavel(sugestao string) string {
+	base := filepath.Base(strings.TrimSpace(sugestao))
+	ext := filepath.Ext(base)
+	base = strings.TrimSuffix(base, ext)
+
+	limpo := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '-'
+		}
+	}, base)
+	limpo = strings.Trim(limpo, "-.")
+	if limpo == "" {
+		limpo = "arquivo"
+	}
+	if len(limpo) > 90 {
+		limpo = limpo[:90]
+	}
+
+	extLimpa := strings.ToLower(strings.TrimPrefix(ext, "."))
+	if len(extLimpa) > 8 || strings.ContainsAny(extLimpa, `/\.`) {
+		return limpo
+	}
+	if extLimpa == "" {
+		return limpo
+	}
+	return limpo + "." + extLimpa
+}

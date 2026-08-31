@@ -394,16 +394,25 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// O nome vem antes do pedido: é por ele que se descobre se já existe um parcial no
+	// disco, e é o parcial que decide se pedimos o arquivo inteiro ou só o que falta.
+	// O id do registro entra no nome, e nao e enfeite.
+	//
+	// No disco o nome precisa ser ESTAVEL para a retomada reencontrar o parcial da tentativa
+	// anterior — e estavel sem id colidiria: dois filmes com o mesmo titulo virariam o mesmo
+	// arquivo, e o segundo continuaria sobre os bytes do primeiro. O id e unico por
+	// construcao, e resolve os dois problemas de uma vez.
+	nome := fmt.Sprintf("%s-%d", variante.DeclaredTitle, arquivo.ID)
+	if variante.DeclaredTitle == "" {
+		nome = fmt.Sprintf("acervo-%d", arquivo.ID)
+	}
+	if arquivo.ContainerExt != "" {
+		nome += "." + arquivo.ContainerExt
+	}
+
+	resp, jaTem, err := b.pedirDaFonte(ctx, url, nome, destino)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("User-Agent", "VODManager/1.0")
-	req.Header.Set("Accept", "*/*")
-
-	resp, err := b.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("conectando à fonte: %w", err)
 	}
 	defer resp.Body.Close()
 	// 206 é sucesso, e recusá-lo estava condenando fontes inteiras.
@@ -428,9 +437,10 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 	// é a conferência de tamanho no fim, com os bytes na mão. Não aqui, por antecipação.
 	total := resp.ContentLength
 	if resp.StatusCode == http.StatusPartialContent {
-		if inicio, tam := lerContentRange(resp.Header.Get("Content-Range")); inicio > 0 {
-			return fmt.Errorf("a fonte entregou a partir do byte %d sem que pedíssemos; "+
-				"uma cópia sem o começo não serve", inicio)
+		if inicio, tam := lerContentRange(resp.Header.Get("Content-Range")); inicio != jaTem {
+			return fmt.Errorf("a fonte entregou a partir do byte %d, e esperávamos %d; "+
+				"uma cópia montada sobre bytes que não correspondem parece completa e "+
+				"não é", inicio, jaTem)
 		} else if tam > 0 {
 			// O total do Content-Range vale mais que o Content-Length: este último diz o
 			// tamanho DESTA resposta, e aquele o do arquivo inteiro.
@@ -446,14 +456,6 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		}
 	}
 
-	nome := variante.DeclaredTitle
-	if nome == "" {
-		nome = fmt.Sprintf("acervo-%d", arquivo.ID)
-	}
-	if arquivo.ContainerExt != "" {
-		nome += "." + arquivo.ContainerExt
-	}
-
 	// O corpo passa por um contador que grava o andamento de tempos em tempos. Envolver o
 	// leitor, em vez de o backend reportar, mantém o progresso funcionando igual no disco e
 	// na nuvem — nenhum dos dois precisa saber que alguém está acompanhando.
@@ -463,7 +465,21 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		periodo: intervaloDoProgresso,
 	}
 
-	local, err := destino.Guardar(ctx, nome, acompanhado, resp.ContentLength)
+	// Continuar quando ha parcial; Guardar quando comeca do zero.
+	//
+	// O tamanho passado e sempre o do arquivo INTEIRO, e nao o do que falta: e ele que serve
+	// para conferir espaco no destino e para o backend saber quando terminou.
+	// No disco, SEMPRE Continuar — mesmo começando do zero.
+	//
+	// A diferença entre os dois não é onde começam, e sim o que fazem ao falhar: Guardar
+	// apaga o parcial, Continuar o preserva. Usar Guardar na primeira tentativa apagaria
+	// justamente os bytes que a retomada precisa, e ela nunca teria de onde continuar.
+	var local armazenamento.Localizacao
+	if rt, ok := destino.(retomavel); ok {
+		local, err = rt.Continuar(ctx, nome, acompanhado, total, jaTem)
+	} else {
+		local, err = destino.Guardar(ctx, nome, acompanhado, total)
+	}
 	if err != nil {
 		if errors.Is(err, armazenamento.ErrSemEspaco) {
 			return fmt.Errorf("sem espaço no destino: %w", err)
@@ -473,11 +489,12 @@ func (b *Baixador) copiarDe(ctx context.Context, arquivo *store.ArquivoGuardado,
 		// no painel que parece defeito do armazenamento — e manda procurar no lugar errado.
 		//
 		// É a falha mais comum de fonte de IPTV sob carga, e a mesma que corta o filme no
-		// meio de quem está assistindo. Aqui ela não causa dano: a cópia parcial já foi
-		// apagada, e a fonte continua servindo como antes.
+		// meio de quem está assistindo. No disco ela deixou de custar caro: o que já desceu
+		// fica, e a próxima tentativa pede só o que falta.
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return fmt.Errorf("a fonte encerrou antes de entregar os %d bytes que anunciou "+
-				"(entregou cerca de %d); nada foi guardado", resp.ContentLength, acompanhado.total)
+				"(entregou cerca de %d); o que ja desceu fica no disco e a proxima tentativa "+
+				"continua daqui", total, jaTem+acompanhado.total)
 		}
 		return err
 	}
@@ -676,3 +693,80 @@ func (v *vagasDaFonte) pegar(sourceID int64, maxConns int) (func(), bool) {
 // tentativa — o contrário gastaria as três tentativas do arquivo por causa de concorrência
 // momentânea, e o título viraria erro permanente sem nunca ter sido de fato tentado.
 var ErrFontesOcupadas = errors.New("todas as origens estão no limite de conexões")
+
+// retomavel é o armazenamento que sabe continuar uma cópia interrompida.
+//
+// Interface opcional, e não um método a mais no Backend: só o disco local consegue fazer
+// isso. Numa conta de nuvem, a sessão de envio expira e o pedaço enviado não é endereçável —
+// retomar lá custaria mais que recomeçar.
+//
+// Quem não implementa simplesmente recomeça, que é o comportamento de sempre.
+type retomavel interface {
+	ParcialDe(sugestao string) int64
+	DescartarParcial(sugestao string)
+	Continuar(ctx context.Context, sugestao string, conteudo io.Reader,
+		bytesEsperados, jaGravados int64) (armazenamento.Localizacao, error)
+}
+
+// pedirDaFonte abre a conexão, retomando de onde parou quando possível.
+//
+// # Por que isto vale a pena
+//
+// As fontes deste sistema cortam a entrega no meio o tempo todo — é a falha mais comum que
+// os registros mostram. Sem retomada, cada corte joga fora tudo o que já tinha descido: um
+// filme de dois gigabytes cortado aos oitenta por cento custa dois gigabytes de novo, e a
+// próxima tentativa tem a mesma chance de ser cortada no mesmo lugar.
+//
+// # Por que a verificação da faixa é obrigatória
+//
+// Pedir do byte N e receber do zero é o defeito que já apareceu três vezes neste sistema, por
+// caminhos diferentes. Aqui ele seria pior que nos outros: os bytes velhos e os novos ficariam
+// GRUDADOS no mesmo arquivo, produzindo um vídeo corrompido que parece completo — tamanho
+// certo, estado "pronto", e imagem quebrada no meio.
+//
+// Por isso: só continua com um 206 que comece exatamente onde paramos. Qualquer outra coisa
+// descarta o parcial e recomeça.
+func (b *Baixador) pedirDaFonte(ctx context.Context, url, nome string,
+	destino armazenamento.Backend) (*http.Response, int64, error) {
+
+	var jaTem int64
+	rt, podeRetomar := destino.(retomavel)
+	if podeRetomar {
+		jaTem = rt.ParcialDe(nome)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("User-Agent", "VODManager/1.0")
+	req.Header.Set("Accept", "*/*")
+	if jaTem > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", jaTem))
+	}
+
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("conectando à fonte: %w", err)
+	}
+
+	if jaTem == 0 {
+		return resp, 0, nil
+	}
+
+	inicio, _ := lerContentRange(resp.Header.Get("Content-Range"))
+	if resp.StatusCode == http.StatusPartialContent && inicio == jaTem {
+		b.log.Info("cópia retomada de onde parou", "arquivo", nome, "bytes", jaTem)
+		return resp, jaTem, nil
+	}
+
+	// A fonte não respeitou a faixa. Recomeçar é a única saída segura.
+	rt.DescartarParcial(nome)
+	if resp.StatusCode == http.StatusOK {
+		return resp, 0, nil
+	}
+
+	// Nem 206 certo nem 200: a resposta não serve nem para retomar nem para recomeçar.
+	resp.Body.Close()
+	return nil, 0, fmt.Errorf("a fonte respondeu %s ao pedido de retomada", resp.Status)
+}
