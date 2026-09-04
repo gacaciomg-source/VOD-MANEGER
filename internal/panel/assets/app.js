@@ -1521,6 +1521,12 @@ async function verCategorias() {
           <td class="numero">${num(c.content_count)}</td>
           <td><div class="grupo-botoes">
             <button class="btn btn-mini" data-renomear="${c.id}" data-nome="${esc(c.name)}">Renomear</button>
+            ${classificacao && classificacao.tem_chave && c.content_count > 1 ? `
+              <button class="btn btn-mini" data-organizar="${c.id}"
+                      data-nome="${esc(c.name)}" data-tipo="${c.content_type}"
+                      data-quantos="${c.content_count}"
+                      title="Consulta o gênero de cada título desta pasta no TMDB e os distribui em pastas por gênero.">
+                Organizar por gênero</button>` : ''}
             <button class="btn btn-mini" data-principal="${c.id}" data-valor="false">Desmarcar</button>
           </div></td>
         </tr>`).join('')}
@@ -1608,7 +1614,38 @@ async function verCategorias() {
     };
   });
 
-  // Filtro por nome, aplicado sobre o que já está desenhado.
+  // Reorganizar UMA pasta pelo gênero de cada título.
+  //
+  // É o caso real, e não a exceção: uma fonte entrega milhares de filmes declarando todos
+  // como "Filmes". Eles TÊM categoria — uma inútil. Organizar só o que não tem pasta nenhuma
+  // não alcançava nada disso, e o botão nem aparecia para filmes.
+  $$('[data-organizar]').forEach(b => {
+    b.onclick = async () => {
+      const quantos = Number(b.dataset.quantos) || 0;
+      const ok = await confirmar(`Organizar "${b.dataset.nome}" por gênero?`,
+        `${num(quantos)} título(s) serão consultados no TMDB e distribuídos em pastas por ` +
+        `gênero. Esta pasta fica com o que o TMDB não reconhecer — e vazia, se ele ` +
+        `reconhecer tudo.\n\n` +
+        `Só os títulos DESTA pasta se movem. O que você já organizou em outras fica onde ` +
+        `está.\n\n` +
+        `Leva alguns minutos: é uma consulta por título, devagar de propósito para não levar ` +
+        `bloqueio. Pode fechar a tela — o trabalho continua.`,
+        'Organizar');
+      if (!ok) return;
+
+      b.disabled = true;
+      try {
+        await api(`/catalogo/classificacao?tipo=${b.dataset.tipo}&de=${b.dataset.organizar}`,
+          { method: 'POST' });
+        aviso('Organização iniciada. Ela continua mesmo se você fechar esta tela.', 'ok');
+        verCategorias();
+      } catch (err) {
+        aviso('Falha: ' + err.message, 'erro');
+        b.disabled = false;
+      }
+    };
+  });
+
   const classificar = $('#classificar');
   if (classificar) classificar.onclick = async () => {
     classificar.disabled = true;
@@ -4196,19 +4233,20 @@ async function verConfiguracoes() {
     </div>
 
     <div class="cartao">
-      <h2>Como o conteúdo é entregue hoje</h2>
+      <h2>Como o conteúdo é entregue</h2>
       <p class="discreto" style="margin:-8px 0 0">
-        <b>Direto da fonte, sem guardar nada.</b> O VOD Manager busca os bytes da sua
-        fonte e repassa ao player, escondendo a origem. Nada é gravado em disco.
+        <b>O acervo primeiro, a fonte depois.</b> Havendo cópia guardada, o vídeo sai do
+        disco ou da nuvem e a fonte nem é procurada. Sem cópia, o VOD Manager busca os bytes
+        na fonte e repassa ao player, escondendo a origem — e, se aquela fonte estiver
+        marcada, guarda no caminho.
         <br><br>
-        A consequência: cada pessoa assistindo abre uma conexão à sua fonte. Dez pessoas
-        no mesmo filme são dez conexões.
+        A diferença aparece na segunda pessoa: sem cache, dez pessoas no mesmo filme são dez
+        conexões à sua fonte. Com ele, é uma — e as outras nove saem daqui.
         <br><br>
-        Na próxima etapa isso passa a ser configurável por fonte, com três modos:
-        <b>sempre direto</b> (nunca guarda), <b>guardar quando alguém assistir</b>
-        (grava na primeira vez e serve do disco depois) e <b>guardar sempre</b>.
-        Fontes com conexão ilimitada podem ficar no direto; as limitadas se beneficiam
-        de guardar.
+        O que é guardado se escolhe em dois lugares, e os dois precisam estar ligados: a
+        <b>chave geral</b> acima, e a marca <b>por fonte</b>, na tela do Acervo. São
+        separados de propósito — a marca por fonte é decidida uma vez e esquecida, e a chave
+        geral é como se para tudo sem ter de lembrar quais fontes foram marcadas.
       </p>
     </div>
   `;
@@ -4370,14 +4408,22 @@ async function verStreams() {
     <div class="cartao">
       <h2>O que acontece quando alguém assiste</h2>
       <p class="discreto" style="margin:-8px 0 0">
-        O VOD Manager <b>não redireciona</b> o player para a sua fonte, e <b>ainda não
-        guarda nada em disco</b>. Os bytes passam através do servidor: ele busca da fonte e
-        repassa ao player, escondendo a origem.
+        O VOD Manager <b>não redireciona</b> o player para a sua fonte: os bytes passam
+        através do servidor, que busca e repassa, escondendo a origem.
         <br><br>
-        A consequência é que <b>cada espectador abre uma conexão à sua fonte</b> — dez
-        pessoas no mesmo filme são dez conexões. É exatamente isso que o cache
-        (Fase 5) elimina: uma conexão à fonte, o arquivo guardado em disco, e todos os
-        demais servidos localmente.
+        A coluna <b>Entrega</b> diz de onde cada reprodução está saindo:
+        <br>
+        • <b>do cache</b> — do seu disco ou da sua nuvem. A fonte nem foi procurada.
+        <br>
+        • <b>baixando e servindo</b> — da fonte, e guardando no caminho. A próxima
+        reprodução deste título já sai do cache.
+        <br>
+        • <b>direto da fonte</b> — sem cópia guardada, e sem guardar. É o que acontece
+        quando o armazenamento está desligado ou aquela fonte não está marcada.
+        <br><br>
+        A diferença entre a primeira e a terceira é a conta da sua fonte: sem cache,
+        <b>cada espectador abre uma conexão nela</b> — dez pessoas no mesmo filme são dez
+        conexões para os mesmos bytes.
       </p>
     </div>
 

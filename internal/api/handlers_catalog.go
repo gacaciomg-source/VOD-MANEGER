@@ -447,7 +447,21 @@ func (s *Server) handleIniciarClassificacao(w http.ResponseWriter, r *http.Reque
 				"themoviedb.org e cole aqui em Configurações.")
 		return
 	}
-	if err := s.deps.Categorizador.Iniciar(r.URL.Query().Get("tipo")); err != nil {
+	// "de" e a pasta a reorganizar. Ausente ou zero significa "os que nao tem pasta nenhuma".
+	//
+	// E o parametro que faz o recurso servir para o caso real: milhares de filmes numa pasta
+	// generica TEM categoria, e sem apontar qual pasta reorganizar eles ficariam invisiveis.
+	var de int64
+	if v := r.URL.Query().Get("de"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, s.deps.Log, http.StatusBadRequest, "invalid_body",
+				"a pasta de origem precisa ser um id válido", "de")
+			return
+		}
+		de = n
+	}
+	if err := s.deps.Categorizador.Iniciar(r.URL.Query().Get("tipo"), de); err != nil {
 		writeError(w, s.deps.Log, http.StatusConflict, "nao_pode_iniciar", err.Error())
 		return
 	}

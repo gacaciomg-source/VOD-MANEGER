@@ -120,7 +120,7 @@ func (c *Categorizador) Parar() {
 //
 // Devolve erro quando não dá para começar — sem chave, ou já rodando. Erros durante a
 // execução ficam no andamento, e não aqui: quem chamou já foi embora quando eles acontecem.
-func (c *Categorizador) Iniciar(tipo string) error {
+func (c *Categorizador) Iniciar(tipo string, deCategoria int64) error {
 	cli := c.cliente(context.Background())
 	if cli == nil {
 		return tmdb.ErrSemChave
@@ -136,11 +136,11 @@ func (c *Categorizador) Iniciar(tipo string) error {
 	c.andamento = Andamento{Rodando: true, InicioEm: time.Now()}
 	c.mu.Unlock()
 
-	go c.rodar(ctx, cli, tipo)
+	go c.rodar(ctx, cli, tipo, deCategoria)
 	return nil
 }
 
-func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo string) {
+func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo string, deCategoria int64) {
 	defer func() {
 		c.mu.Lock()
 		agora := time.Now()
@@ -160,7 +160,7 @@ func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo strin
 		if ctx.Err() != nil {
 			return
 		}
-		lote, err := c.store.ConteudosSemCategoria(ctx, tipo, loteDaClassificacao)
+		lote, err := c.store.ConteudosSemCategoria(ctx, tipo, deCategoria, loteDaClassificacao)
 		if err != nil {
 			c.anotarErro("falha ao ler a fila: " + err.Error())
 			return
@@ -178,7 +178,7 @@ func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo strin
 			if ctx.Err() != nil {
 				return
 			}
-			c.classificarUm(ctx, cli, &lote[i], pastas)
+			c.classificarUm(ctx, cli, &lote[i], deCategoria, pastas)
 			time.Sleep(pausaEntreConsultas)
 		}
 
@@ -191,7 +191,7 @@ func (c *Categorizador) rodar(ctx context.Context, cli *tmdb.Cliente, tipo strin
 }
 
 func (c *Categorizador) classificarUm(ctx context.Context, cli *tmdb.Cliente,
-	item *store.SemCategoria, pastas map[string]int64) {
+	item *store.SemCategoria, deCategoria int64, pastas map[string]int64) {
 
 	serie := item.Tipo == store.ContentSeries
 
@@ -247,7 +247,7 @@ func (c *Categorizador) classificarUm(ctx context.Context, cli *tmdb.Cliente,
 		return
 	}
 
-	if err := c.store.DefinirCategoriaDoConteudo(ctx, item.ID, id); err != nil {
+	if err := c.store.DefinirCategoriaDoConteudo(ctx, item.ID, deCategoria, id); err != nil {
 		c.mu.Lock()
 		c.andamento.Processados++
 		c.andamento.Falhas++

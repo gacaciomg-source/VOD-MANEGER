@@ -966,11 +966,11 @@ func TestFilaDaClassificacaoExecuta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CriarPrincipal: %v", err)
 	}
-	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, pasta); err != nil {
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, 0, pasta); err != nil {
 		t.Fatalf("DefinirCategoriaDoConteudo: %v", err)
 	}
 
-	fila, err := env.Store.ConteudosSemCategoria(ctx, store.ContentMovie, 100)
+	fila, err := env.Store.ConteudosSemCategoria(ctx, store.ContentMovie, 0, 100)
 	if err != nil {
 		t.Fatalf("ConteudosSemCategoria: %v", err)
 	}
@@ -991,7 +991,9 @@ func TestFilaDaClassificacaoExecuta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CriarPrincipal: %v", err)
 	}
-	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, outra); err != nil {
+	// Vindo "de" lugar nenhum (0), um titulo que JA tem pasta nao se move. E a regra que
+	// protege o trabalho humano: a classificacao so tira de onde mandaram tirar.
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, comPasta.ID, 0, outra); err != nil {
 		t.Fatalf("DefinirCategoriaDoConteudo: %v", err)
 	}
 	var atual int64
@@ -1054,5 +1056,74 @@ func TestValidadeDaFonteEGuardada(t *testing.T) {
 	}
 	if src.AssinaturaExpiraEm != nil {
 		t.Fatal("sem data informada, o campo precisa voltar a ser nulo")
+	}
+}
+
+// TestClassificarReorganizaPastaGenerica cobre o caso que a primeira versão não via.
+//
+// Uma fonte entrega milhares de filmes declarando todos como "Filmes". Eles TÊM categoria — só
+// que uma inútil. A primeira versão da classificação só enxergava `category_id IS NULL`, e por
+// isso não via justamente o problema que veio resolver: o usuário abria a tela e o botão nem
+// aparecia para filmes.
+func TestClassificarReorganizaPastaGenerica(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	generica, err := env.Store.CriarPrincipal(ctx, "Filmes", "filmes", store.ContentMovie)
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	organizada, err := env.Store.CriarPrincipal(ctx, "Clássicos", "classicos", store.ContentMovie)
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+
+	naGenerica, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Na Generica", NormalizedTitle: "na generica",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	jaOrganizado, err := env.Store.CreateContent(ctx, store.NewContent{
+		Type: store.ContentMovie, Title: "Ja Organizado", NormalizedTitle: "ja organizado",
+	})
+	if err != nil {
+		t.Fatalf("CreateContent: %v", err)
+	}
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, naGenerica.ID, 0, generica); err != nil {
+		t.Fatalf("pondo na genérica: %v", err)
+	}
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, jaOrganizado.ID, 0, organizada); err != nil {
+		t.Fatalf("pondo na organizada: %v", err)
+	}
+
+	// A fila da pasta genérica traz só quem está NELA.
+	fila, err := env.Store.ConteudosSemCategoria(ctx, store.ContentMovie, generica, 100)
+	if err != nil {
+		t.Fatalf("ConteudosSemCategoria: %v", err)
+	}
+	if len(fila) != 1 || fila[0].ID != naGenerica.ID {
+		t.Fatalf("a fila devia ter só o título da pasta genérica; veio %d", len(fila))
+	}
+
+	destino, err := env.Store.CriarPrincipal(ctx, "Ação", "acao", store.ContentMovie)
+	if err != nil {
+		t.Fatalf("CriarPrincipal: %v", err)
+	}
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, naGenerica.ID, generica, destino); err != nil {
+		t.Fatalf("movendo da genérica: %v", err)
+	}
+
+	// E o que já estava organizado à mão NÃO se move, mesmo com a reorganização rodando.
+	if err := env.Store.DefinirCategoriaDoConteudo(ctx, jaOrganizado.ID, generica, destino); err != nil {
+		t.Fatalf("tentativa de mover o organizado: %v", err)
+	}
+	var onde int64
+	if err := env.Pool.QueryRow(ctx,
+		`SELECT category_id FROM contents WHERE id = $1`, jaOrganizado.ID).Scan(&onde); err != nil {
+		t.Fatalf("lendo a categoria: %v", err)
+	}
+	if onde != organizada {
+		t.Fatal("a classificação moveu um título que estava em outra pasta — decisão humana perdida")
 	}
 }

@@ -666,17 +666,25 @@ type SemCategoria struct {
 //
 // Ordenado por id para a retomada ser previsível: uma passagem interrompida na metade
 // continua de onde parou em vez de reprocessar o começo.
-func (s *Store) ConteudosSemCategoria(ctx context.Context, tipo string, limite int) ([]SemCategoria, error) {
+// `deCategoria` zero significa "os que não têm pasta nenhuma".
+//
+// Qualquer outro valor significa "os que estão NESTA pasta" — e esse é o caso que importa na
+// prática. Uma fonte entrega milhares de filmes declarando todos como "Filmes", e eles TÊM
+// categoria: uma inútil. A primeira versão disto só enxergava `category_id IS NULL`, e por
+// isso não via justamente o problema que veio resolver.
+func (s *Store) ConteudosSemCategoria(ctx context.Context, tipo string, deCategoria int64, limite int) ([]SemCategoria, error) {
 	if limite <= 0 || limite > 5000 {
 		limite = 500
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, type, title, year, tmdb_id
 		FROM contents
-		WHERE status = 'active' AND category_id IS NULL
+		WHERE status = 'active'
+		  AND (CASE WHEN $3::bigint = 0 THEN category_id IS NULL
+		            ELSE category_id = $3::bigint END)
 		  AND ($1 = '' OR type = $1)
 		ORDER BY id
-		LIMIT $2`, tipo, limite)
+		LIMIT $2`, tipo, limite, deCategoria)
 	if err != nil {
 		return nil, wrapErr("listando conteúdos sem categoria", err)
 	}
@@ -705,12 +713,22 @@ func (s *Store) ContarSemCategoria(ctx context.Context) (filmes, series int64, e
 
 // DefinirCategoriaDoConteudo põe um título numa pasta.
 //
-// Só quando ele ainda não tem: a classificação automática nunca sobrepõe uma decisão humana.
-// Quem organizou à mão organizou por um motivo, e um robô que passa por cima disso é pior que
-// um robô que não passa.
-func (s *Store) DefinirCategoriaDoConteudo(ctx context.Context, id, categoria int64) error {
+// `de` é de ONDE ele pode sair: zero significa "só se não tiver pasta nenhuma", e um id
+// significa "só se estiver exatamente nesta".
+//
+// Essa condição é o que impede a classificação de sobrepor decisão humana. Ela nunca move um
+// título de uma pasta qualquer: move do lugar que quem administra APONTOU — a pasta genérica
+// que ele mandou reorganizar — e nada mais. Um filme que alguém já pôs em "Clássicos" fica lá,
+// mesmo que a reorganização esteja rodando.
+//
+// Sem a condição, um segundo trabalhador poderia mover um título que o primeiro acabou de
+// classificar, e o resultado dependeria da ordem — que é o tipo de defeito que só aparece com
+// carga e nunca se reproduz.
+func (s *Store) DefinirCategoriaDoConteudo(ctx context.Context, id, de, para int64) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE contents SET category_id = $2, updated_at = now()
-		WHERE id = $1 AND category_id IS NULL`, id, categoria)
+		UPDATE contents SET category_id = $3, updated_at = now()
+		WHERE id = $1
+		  AND (CASE WHEN $2::bigint = 0 THEN category_id IS NULL
+		            ELSE category_id = $2::bigint END)`, id, de, para)
 	return wrapErr("definindo a categoria do conteúdo", err)
 }
