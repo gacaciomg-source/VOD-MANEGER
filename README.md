@@ -1,5 +1,9 @@
 # VOD Manager
 
+**Português** · [English](README.en.md)
+
+> Feito no Brasil 🇧🇷 — o código e os comentários são em português.
+
 Gerenciador de acervo de vídeo sob demanda. Ele unifica o catálogo de várias fontes numa
 biblioteca só, entrega os vídeos aos seus clientes e guarda uma cópia local do que é assistido
 — para que a segunda pessoa a abrir um filme não custe nada à fonte.
