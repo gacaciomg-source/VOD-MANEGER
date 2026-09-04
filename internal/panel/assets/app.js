@@ -3401,6 +3401,9 @@ function desenharNuvens(resumo) {
                   <div class="dica">${num(n.arquivos)} arquivo(s)</div></td>
               <td>${estado}</td>
               <td><div class="grupo-botoes">
+                <button class="btn btn-mini" data-nuvem-editar="${n.id}"
+                        data-nome="${esc(n.nome)}" data-pasta="${esc(n.pasta_raiz || '')}"
+                        data-ordem="${n.ordem}">Editar</button>
                 ${n.pasta_raiz ? '' : `
                   <button class="btn btn-mini" data-nuvem-pasta="${n.id}"
                           title="Cria uma pasta &quot;VOD Manager&quot; na conta e passa a gravar dentro dela. Os arquivos que já estão na raiz continuam onde estão.">
@@ -3746,6 +3749,77 @@ function ligarAcoesDasNuvens() {
       recarregarAcervo();
     } catch (err) { aviso('Falha: ' + err.message, 'erro'); }
   };
+
+  // Editar uma conta já cadastrada.
+  //
+  // Antes disso, mudar a pasta ou a ordem exigia remover a conta e cadastrar de novo — o que
+  // é impossível quando ela já tem acervo dentro: remover é recusado enquanto houver arquivo,
+  // e com razão. A conta ficava presa na configuração com que nasceu.
+  $$('[data-nuvem-editar]').forEach(b => {
+    b.onclick = () => abrirModal(`Editar "${b.dataset.nome}"`, `
+      <label>Nome da conta
+        <input value="${esc(b.dataset.nome)}" disabled>
+      </label>
+      <p class="dica">
+        O nome <b>não pode ser alterado</b>, e não é teimosia: ele faz parte da proteção
+        criptográfica das credenciais. Trocá-lo tornaria os tokens ilegíveis, e a conta
+        pararia de funcionar sem nada explicar o motivo.
+      </p>
+
+      <label>Pasta no Drive (id)
+        <input id="ed-pasta" value="${esc(b.dataset.pasta)}" placeholder="em branco = raiz da conta">
+      </label>
+      <p class="dica">
+        Confina o acervo numa pasta em vez de espalhá-lo pela raiz, junto dos documentos e
+        fotos de quem cedeu a conta.
+        <br>
+        O id está na URL quando você abre a pasta no Drive, depois de <span class="mono">/folders/</span>.
+        Mas atenção: o sistema só enxerga o que ele mesmo criou — uma pasta feita à mão na
+        tela do Drive é invisível para ele. Prefira o botão <b>Criar pasta</b>.
+        <br>
+        <b>O que já está guardado não se move.</b> A mudança vale das próximas cópias em
+        diante.
+      </p>
+
+      <label>Ordem de preenchimento
+        <input id="ed-ordem" type="number" min="1" value="${esc(b.dataset.ordem)}">
+      </label>
+      <p class="dica">
+        Com mais de uma conta, a de menor número recebe primeiro — e só quando ela encher é
+        que a próxima entra. É previsível de propósito: espalhar o acervo por todas faria
+        perder uma conta significar perder um pedaço de tudo.
+      </p>
+
+      <div class="erro" id="ed-erro" hidden></div>
+      <div class="grupo-botoes">
+        <button class="btn" data-acao="cancelar">Cancelar</button>
+        <button class="btn btn-primario" data-acao="salvar">Salvar</button>
+      </div>
+    `, corpo => {
+      corpo.querySelector('[data-acao=cancelar]').onclick = fecharModal;
+      corpo.querySelector('[data-acao=salvar]').onclick = async e => {
+        const erro = corpo.querySelector('#ed-erro');
+        erro.hidden = true;
+        e.target.disabled = true;
+        try {
+          await api(`/nuvens/${b.dataset.nuvemEditar}`, {
+            method: 'PATCH',
+            corpo: {
+              pasta_raiz: corpo.querySelector('#ed-pasta').value.trim(),
+              ordem: Number(corpo.querySelector('#ed-ordem').value) || 100,
+            },
+          });
+          fecharModal();
+          aviso('Conta atualizada.', 'ok');
+          recarregarAcervo();
+        } catch (err) {
+          erro.textContent = err.message;
+          erro.hidden = false;
+          e.target.disabled = false;
+        }
+      };
+    });
+  });
 
   $$('[data-nuvem-pasta]').forEach(b => {
     b.onclick = () => comAcao(async () => {
