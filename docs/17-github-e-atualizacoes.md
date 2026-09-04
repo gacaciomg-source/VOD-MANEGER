@@ -113,7 +113,7 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o vodmanager-linux ./cmd/vodm
 Envie:
 
 ```bash
-scp vodmanager-linux gustavo@SEU_IP:~/
+scp vodmanager-linux vodm@SEU_IP:~/
 ```
 
 O `scp` já vem no Windows 10/11 — funciona no PowerShell e no terminal do Git Bash. Ele
@@ -168,13 +168,13 @@ Aceite o caminho padrão. Pode deixar a senha da chave em branco.
 Copie para a VPS:
 
 ```bash
-ssh-copy-id gustavo@SEU_IP
+ssh-copy-id vodm@SEU_IP
 ```
 
 Se `ssh-copy-id` não existir no seu Windows:
 
 ```bash
-cat ~/.ssh/id_ed25519.pub | ssh gustavo@SEU_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+cat ~/.ssh/id_ed25519.pub | ssh vodm@SEU_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
 ```
 
 A partir daí, `ssh` e `scp` não pedem mais senha.
@@ -211,7 +211,7 @@ chmod +x /opt/vodmanager-fonte/scripts/atualizar.sh
 No Windows:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o vodmanager-linux ./cmd/vodmanager && scp vodmanager-linux gustavo@SEU_IP:~/
+GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o vodmanager-linux ./cmd/vodmanager && scp vodmanager-linux vodm@SEU_IP:~/
 ```
 
 Na VPS:

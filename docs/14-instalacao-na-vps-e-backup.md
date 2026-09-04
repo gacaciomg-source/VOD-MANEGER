@@ -64,10 +64,10 @@ apt update && apt upgrade -y && apt install -y postgresql postgresql-contrib git
 Crie um usuário para você e dê a ele acesso administrativo:
 
 ```bash
-adduser gustavo && usermod -aG sudo gustavo
+adduser vodm && usermod -aG sudo vodm
 ```
 
-Deste ponto em diante, entre como `gustavo` e use `sudo` quando precisar.
+Deste ponto em diante, entre como `vodm` e use `sudo` quando precisar.
 
 ### 2.4 O binário: compile no seu Windows, envie pronto
 
@@ -86,7 +86,7 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=1.0.0" -o vodma
 Envie para a VPS:
 
 ```bash
-scp vodmanager-linux gustavo@SEU_IP:~/
+scp vodmanager-linux vodm@SEU_IP:~/
 ```
 
 E instale, já na VPS:
@@ -176,7 +176,7 @@ silêncio e falhar depois, quando alguém tentar assistir.
 ### 3.3 Trazer o backup para o seu computador
 
 ```bash
-scp gustavo@SEU_IP:~/vodmanager-2026-08-19-1858.tar.gz .
+scp vodm@SEU_IP:~/vodmanager-2026-08-19-1858.tar.gz .
 ```
 
 ### 3.4 Restaurar numa máquina nova
@@ -187,7 +187,7 @@ scp gustavo@SEU_IP:~/vodmanager-2026-08-19-1858.tar.gz .
 3. Envie o arquivo e restaure:
 
 ```bash
-scp backup.tar.gz gustavo@IP_DA_MAQUINA_NOVA:~/
+scp backup.tar.gz vodm@IP_DA_MAQUINA_NOVA:~/
 ```
 
 ```bash

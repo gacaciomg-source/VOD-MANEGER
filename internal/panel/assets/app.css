@@ -103,6 +103,9 @@ input[type=checkbox] { width: auto; accent-color: var(--acento); }
   padding: 1px 7px; font-size: 11px; font-weight: 700;
 }
 .rodape-lateral { border-top: 1px solid var(--borda); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+/* Discreto de proposito: cumpre a AGPL sem competir com o que a pessoa veio fazer. */
+.fonte-aberta { color: var(--texto-3); font-size: 11px; text-decoration: none; text-align: center; }
+.fonte-aberta:hover { color: var(--texto); text-decoration: underline; }
 .usuario { font-size: 13px; color: var(--texto-2); padding: 0 10px; }
 .usuario b { color: var(--texto); display: block; }
 
