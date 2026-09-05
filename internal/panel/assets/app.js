@@ -2269,8 +2269,12 @@ const CAUSAS = {
     detalhe: 'Ela encerrou antes de entregar o tamanho que anunciou. O filme para no meio e o player volta ao começo. É a falha mais comum de fonte sob carga — e o cache é o que a elimina, porque um arquivo guardado não pode ser cortado.',
   },
   video_de_manutencao: {
-    culpa: 'fonte', rotulo: 'A fonte devolveu vídeo de manutenção',
-    detalhe: 'Veio um arquivo curto no lugar do filme. O sistema detectou e tentou a próxima origem.',
+    culpa: 'fonte', rotulo: 'Aviso de manutenção entregue no lugar do filme',
+    detalhe: 'Veio um arquivo curto demais para ser vídeo. Havendo outra fonte com o mesmo ' +
+      'título, o sistema troca sozinho e isto nem aparece aqui — se está aqui, é porque não ' +
+      'havia alternativa: aquele título só existe em fontes que estão devolvendo o aviso. ' +
+      'Entregamos assim mesmo porque dez segundos de aviso são ruins e tela preta é pior. ' +
+      'A saída é cadastrar outra fonte que tenha o título, ou resolver com a fonte atual.',
   },
   falha_no_acervo: {
     culpa: 'nosso', rotulo: 'Falha ao ler o arquivo guardado',

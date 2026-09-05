@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -148,7 +147,10 @@ func lerArquivo(linha pgx.Row) (*ArquivoGuardado, error) {
 //
 // Ausência não é erro. É a resposta "não temos, vá à fonte", que é o caminho normal
 // enquanto o cache estiver desligado.
-func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID int64) (*ArquivoGuardado, error) {
+func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID, minimo int64) (*ArquivoGuardado, error) {
+	if minimo < TamanhoMinimoDeVideo {
+		minimo = TamanhoMinimoDeVideo
+	}
 	// A conferência de tamanho faz parte da consulta, e não do chamador.
 	//
 	// Uma cópia cujo tamanho não fecha com o que a fonte anunciou é um pedaço de filme, e
@@ -166,7 +168,7 @@ func (s *Store) ArquivoProntoDaVariante(ctx context.Context, variantID int64) (*
 		 WHERE variant_id = $1 AND estado = 'pronto'
 		   AND bytes >= $2
 		   AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`,
-		variantID, TamanhoMinimoDeVideo))
+		variantID, minimo))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
@@ -831,7 +833,10 @@ func (s *Store) CandidatoParaLimpeza(ctx context.Context, idadeMinima time.Durat
 // Removê-las devolve a variante à fila: na próxima reprodução, o título é copiado inteiro.
 //
 // Roda na partida, e é idempotente: sem cópias truncadas ela não faz nada.
-func (s *Store) MarcarCopiasTruncadas(ctx context.Context) (int64, error) {
+func (s *Store) MarcarCopiasTruncadas(ctx context.Context, minimo int64) (int64, error) {
+	if minimo < TamanhoMinimoDeVideo {
+		minimo = TamanhoMinimoDeVideo
+	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE arquivos_guardados SET estado = 'removendo'
 		WHERE estado = 'pronto'
@@ -844,8 +849,8 @@ func (s *Store) MarcarCopiasTruncadas(ctx context.Context) (int64, error) {
 		    -- Esta segunda condição existe porque a primeira depende do Content-Length, e uma
 		    -- fonte pode não enviá-lo. Uma página de erro de dois quilobytes passava por aqui
 		    -- intocada, e o acervo a servia no lugar do filme.
-		    OR bytes < `+strconv.FormatInt(TamanhoMinimoDeVideo, 10)+`
-		  )`)
+		    OR bytes < $1
+		  )`, minimo)
 	if err != nil {
 		return 0, wrapErr("marcando cópias truncadas", err)
 	}
@@ -1055,7 +1060,10 @@ func (s *Store) ResumoParaApagar(ctx context.Context, origem string) (arquivos, 
 //
 // A ordem do resultado segue a das variantes recebidas: elas já vêm por prioridade, e a
 // cópia da fonte preferida deve ganhar da cópia de uma fonte de reserva.
-func (s *Store) ArquivoProntoDeAlguma(ctx context.Context, variantIDs []int64) (*ArquivoGuardado, error) {
+func (s *Store) ArquivoProntoDeAlguma(ctx context.Context, variantIDs []int64, minimo int64) (*ArquivoGuardado, error) {
+	if minimo < TamanhoMinimoDeVideo {
+		minimo = TamanhoMinimoDeVideo
+	}
 	if len(variantIDs) == 0 {
 		return nil, ErrNotFound
 	}
@@ -1064,7 +1072,7 @@ func (s *Store) ArquivoProntoDeAlguma(ctx context.Context, variantIDs []int64) (
 		WHERE variant_id = ANY($1) AND estado = 'pronto'
 		  AND bytes >= $2
 		  AND (bytes_totais IS NULL OR bytes_totais = 0 OR bytes = bytes_totais)`,
-		variantIDs, TamanhoMinimoDeVideo)
+		variantIDs, minimo)
 	if err != nil {
 		return nil, wrapErr("buscando arquivo guardado das variantes", err)
 	}

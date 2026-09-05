@@ -149,7 +149,7 @@ func (b *Baixador) Start(ctx context.Context) error {
 
 	// Copias truncadas de uma versao anterior: inertes na reproducao, mas ocupando a
 	// variante — o que impediria o titulo de ser copiado de novo, para sempre.
-	if n, err := b.store.MarcarCopiasTruncadas(ctx); err != nil {
+	if n, err := b.store.MarcarCopiasTruncadas(ctx, b.servico.MinimoDeVideo()); err != nil {
 		b.log.Warn("falha ao marcar cópias truncadas", "erro", err)
 	} else if n > 0 {
 		b.log.Warn("cópias truncadas enviadas para remoção; os títulos voltam à fila",

@@ -196,7 +196,7 @@ func (s *Servico) Abrir(ctx context.Context, arquivo *store.ArquivoGuardado, des
 // estiver desligado, é o único caso — e tratá-la como erro encheria o registro de linhas
 // que não significam nada.
 func (s *Servico) CopiaPronta(ctx context.Context, variantID int64) *store.ArquivoGuardado {
-	a, err := s.store.ArquivoProntoDaVariante(ctx, variantID)
+	a, err := s.store.ArquivoProntoDaVariante(ctx, variantID, s.MinimoDeVideo())
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			s.log.Warn("falha ao consultar o acervo", "variant_id", variantID, "erro", err)
@@ -467,7 +467,7 @@ func (s *Servico) backendDaPolitica(ctx context.Context, pol Politica, nuvemID *
 // A ordem das variantes é respeitada: elas chegam por prioridade de reprodução, e a cópia da
 // fonte preferida deve ganhar da cópia de uma fonte de reserva.
 func (s *Servico) CopiaProntaDeAlguma(ctx context.Context, variantIDs []int64) *store.ArquivoGuardado {
-	a, err := s.store.ArquivoProntoDeAlguma(ctx, variantIDs)
+	a, err := s.store.ArquivoProntoDeAlguma(ctx, variantIDs, s.MinimoDeVideo())
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			s.log.Warn("falha ao consultar o acervo", "erro", err)

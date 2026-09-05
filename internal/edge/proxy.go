@@ -171,6 +171,9 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		resp       *http.Response
 		cancelar   context.CancelFunc
 		fechada    bool
+		// serviuAviso: entregamos algo que parece aviso de manutencao por nao haver
+		// alternativa. A entrega deu certo; o conteudo e que provavelmente nao e o filme.
+		serviuAviso bool
 	)
 
 	// O fechamento da sessão precisa ser GARANTIDO, e não escrito no fim da função.
@@ -235,6 +238,10 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 					"bytes_anunciados", total, "minimo", p.tamanhoMinimo)
 				continue
 			}
+			// Servido, mas REGISTRADO. Sem isto, o aviso de manutencao era o unico desfecho
+			// do sistema que nao deixava rastro: o log dizia, e a tela nao — e quem administra
+			// nao tinha como saber QUAIS titulos estavam caindo nisso, nem quantos.
+			serviuAviso = true
 			p.log.Warn("vídeo curto demais, mas é a última origem disponível; servindo assim mesmo",
 				"variant_id", v.ID, "fonte", v.SourceName, "bytes_anunciados", total)
 		}
@@ -334,6 +341,18 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 	enviados, errCopia := io.CopyBuffer(saida, corpo, buf)
 
 	estado, codigoErro := "closed", ""
+	// O aviso de manutenção servido por falta de alternativa aparece nas Falhas.
+	//
+	// A entrega em si deu certo, então o estado continua "closed" — inflar a contagem de
+	// erros por algo que funcionou tornaria a tela menos confiável, não mais. Mas o código
+	// fica, porque a informação que importa não é "falhou": é QUAIS títulos estão entregando
+	// um aviso no lugar do filme, e de qual fonte.
+	//
+	// Sem isto, era o único desfecho do sistema que não deixava rastro: o log dizia, a tela
+	// não, e quem administra descobria pelo cliente.
+	if serviuAviso {
+		codigoErro = "video_de_manutencao"
+	}
 	if errCopia != nil {
 		// Cliente que fecha o player no meio é o caso mais comum e não é falha nossa.
 		switch {

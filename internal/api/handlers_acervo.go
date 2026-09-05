@@ -248,7 +248,7 @@ func (s *Server) handleTentarDeNovo(w http.ResponseWriter, r *http.Request) {
 // Só cache. O acervo próprio nunca entra: um arquivo pequeno que você enviou é um arquivo
 // pequeno que você quis enviar.
 func (s *Server) handleLimparInvalidas(w http.ResponseWriter, r *http.Request) {
-	n, err := s.deps.Store.MarcarCopiasTruncadas(r.Context())
+	n, err := s.deps.Store.MarcarCopiasTruncadas(r.Context(), s.minimoDeVideo())
 	if err != nil {
 		s.fail(w, r, err, "limpando cópias inválidas do acervo")
 		return
@@ -314,4 +314,15 @@ func (s *Server) handleEsvaziarAcervo(w http.ResponseWriter, r *http.Request) {
 		"acervo esvaziado ("+req.Origem+"): "+strconv.FormatInt(n, 10)+" arquivo(s)",
 		actorOf(r), nil)
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"removidos": n})
+}
+
+// minimoDeVideo devolve o limiar do acervo, com um piso quando ele não está disponível.
+//
+// O acervo é nulo num processo que só serve o painel. Zero aqui faria a limpeza cair no piso
+// absoluto do store — que é o comportamento certo, e não uma falha.
+func (s *Server) minimoDeVideo() int64 {
+	if s.deps.Nuvens == nil {
+		return 0
+	}
+	return s.deps.Nuvens.MinimoDeVideo()
 }

@@ -494,13 +494,13 @@ func TestCopiaPequenaDemaisNaoEServida(t *testing.T) {
 		t.Fatalf("EnfileirarArquivo: %v", err)
 	}
 
-	if _, err := env.Store.ArquivoProntoDaVariante(ctx, variante.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := env.Store.ArquivoProntoDaVariante(ctx, variante.ID, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("uma cópia de 1,6 KB não pode ser servida como filme; veio: %v", err)
 	}
 
 	// E a varredura tem de alcançá-la, ou ela ocuparia a variante para sempre — impedindo
 	// que o título fosse copiado de novo.
-	n, err := env.Store.MarcarCopiasTruncadas(ctx)
+	n, err := env.Store.MarcarCopiasTruncadas(ctx, 0)
 	if err != nil {
 		t.Fatalf("MarcarCopiasTruncadas: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestBuscaDeCopiaRespeitaAPrioridade(t *testing.T) {
 	reserva := criarCopia("reserva", 800<<20)
 
 	// A preferida vem primeiro na lista: é ela que deve ganhar.
-	a, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{preferida, reserva})
+	a, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{preferida, reserva}, 0)
 	if err != nil {
 		t.Fatalf("ArquivoProntoDeAlguma: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestBuscaDeCopiaRespeitaAPrioridade(t *testing.T) {
 
 	// Invertendo a ordem, a resposta acompanha — provando que é a lista que manda, e não
 	// a ordem em que o banco resolveu devolver as linhas.
-	a, err = env.Store.ArquivoProntoDeAlguma(ctx, []int64{reserva, preferida})
+	a, err = env.Store.ArquivoProntoDeAlguma(ctx, []int64{reserva, preferida}, 0)
 	if err != nil {
 		t.Fatalf("ArquivoProntoDeAlguma invertido: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestBuscaDeCopiaRespeitaAPrioridade(t *testing.T) {
 	}
 
 	// Sem nenhuma cópia, ausência — e não erro: é o caminho normal do cache vazio.
-	if _, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{999998, 999999}); !errors.Is(err, store.ErrNotFound) {
+	if _, err := env.Store.ArquivoProntoDeAlguma(ctx, []int64{999998, 999999}, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("sem cópia devia ser ErrNotFound; veio: %v", err)
 	}
 }

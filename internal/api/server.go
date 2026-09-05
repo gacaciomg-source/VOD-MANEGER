@@ -57,7 +57,7 @@ type Deps struct {
 	// Interface estreita, e nao o servico do acervo inteiro: o unico poder que a API
 	// precisa aqui e falar com uma conta ja cadastrada. Passar o servico completo daria
 	// ao plano de controle acesso a decisoes de guarda e limpeza que nao sao dele.
-	Nuvens MontadorDeNuvens
+	Nuvens ServicoDeAcervo
 	// Categorizador classifica conteudos por genero via TMDB. Nulo quando nao ha chave —
 	// e nulo e um estado legitimo: o sistema inteiro funciona sem o recurso.
 	Categorizador *vsync.Categorizador
@@ -353,7 +353,17 @@ func (m *Module) Stop(ctx context.Context) error {
 // Err devolve o canal de erro fatal do listener.
 func (m *Module) Err() <-chan error { return m.errCh }
 
-// MontadorDeNuvens é o que a API precisa saber sobre contas de nuvem.
-type MontadorDeNuvens interface {
+// ServicoDeAcervo é o que a API precisa saber sobre o acervo.
+//
+// Interface estreita, e não o serviço concreto: o plano de controle precisa falar com uma
+// conta já cadastrada e conhecer o limiar do que é um vídeo. Passar o serviço inteiro daria a
+// ele acesso a decisões de guarda e limpeza que não são dele.
+type ServicoDeAcervo interface {
 	BackendDaNuvem(ctx context.Context, id int64) (armazenamento.Backend, error)
+	// MinimoDeVideo é o tamanho abaixo do qual uma cópia não é aceita como filme.
+	//
+	// A API precisa dele para a limpeza manual usar o MESMO critério da automática. Sem
+	// isso, o botão do painel varria com um limiar e o sistema gravava com outro — e as
+	// cópias entre os dois valores sobreviviam à limpeza e continuavam sendo servidas.
+	MinimoDeVideo() int64
 }
