@@ -260,21 +260,14 @@ func (s *Server) handleLimparInvalidas(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{"removidas": n})
 }
 
-// handleEstimativaDeArmazenamento diz quanto caberia guardar cada fonte inteira.
+// handleEstimativaDeArmazenamento diz quanto o acervo inteiro ocuparia, cada título uma vez.
 func (s *Server) handleEstimativaDeArmazenamento(w http.ResponseWriter, r *http.Request) {
-	fontes, err := s.deps.Store.EstimarArmazenamento(r.Context())
+	est, err := s.deps.Store.EstimarAcervo(r.Context())
 	if err != nil {
 		s.fail(w, r, err, "estimando armazenamento")
 		return
 	}
-	var total, titulos int64
-	for _, f := range fontes {
-		total += f.TotalBytes
-		titulos += f.Titulos
-	}
-	writeJSON(w, s.deps.Log, http.StatusOK, map[string]any{
-		"fontes": fontes, "total_bytes": total, "titulos": titulos,
-	})
+	writeJSON(w, s.deps.Log, http.StatusOK, est)
 }
 
 type esvaziarAcervoRequest struct {

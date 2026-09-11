@@ -5264,52 +5264,92 @@ function motivoDoArquivo(a) {
 }
 
 /**
- * Quanto caberia guardar tudo, por fonte.
+ * Quanto disco o acervo inteiro precisaria — cada título uma vez.
  *
- * O número sai do que JÁ foi baixado de cada fonte, e não de uma média geral. Cada fonte tem
- * um perfil de qualidade próprio — uma entrega filmes de 800 MB, outra de 4 GB —, e uma média
- * única erraria nas duas.
+ * A versão anterior somava, por fonte, TODAS as cópias oferecidas. O mesmo filme em três
+ * pastas de uma fonte e de novo em outra entrava quatro vezes na conta, e a tela pedia várias
+ * vezes o disco que o sistema de fato usa — porque ele guarda uma cópia só.
  *
- * A AMOSTRA aparece junto, e é a parte que mais importa. Com quatro arquivos baixados, "18 TB"
- * não é uma estimativa: é uma extrapolação de quatro pontos, e mostrar só o total convidaria
- * a uma decisão de compra sobre nada. Quem lê precisa poder desconfiar do número.
+ * Os três cenários existem porque a escolha de qual cópia guardar muda o total muito mais que
+ * qualquer ajuste fino da média: um título que existe em SD e em 4K pesa dez vezes mais
+ * dependendo da regra.
+ *
+ * E a origem do peso aparece faixa por faixa. Peso medido e peso típico não podem ter a mesma
+ * cara: um convida a comprar disco, o outro só dá a ordem de grandeza.
  */
 function cartaoDeEstimativa(e) {
-  if (!e || !Array.isArray(e.fontes) || !e.fontes.length) return '';
+  if (!e || !Array.isArray(e.faixas)) return '';
+  const titulos = (e.filmes || 0) + (e.episodios || 0);
+  if (!titulos) return '';
 
-  const linha = f => `
+  const nomeDaFaixa = {
+    '4k': '4K', fhd: 'Full HD (1080p)', hd: 'HD (720p)', sd: 'SD', '?': 'Não informada',
+  };
+  const repetidas = Math.max(0, (e.variantes || 0) - titulos);
+
+  const cenario = (rotulo, detalhe, c, destaque) => `
     <tr>
-      <td><b>${esc(f.fonte)}</b>
-        ${f.amostra >= 20 ? '' :
-          `<div class="dica" style="color:var(--alerta)">
-             estimativa fraca: só ${num(f.amostra)} arquivo(s) baixado(s)</div>`}</td>
-      <td class="numero">${num(f.titulos)}</td>
-      <td class="numero">${formatarBytes(f.media_bytes)}</td>
-      <td class="numero"><b>${formatarBytes(f.total_bytes)}</b></td>
+      <td>${destaque ? `<b>${rotulo}</b>` : rotulo}<div class="dica">${detalhe}</div></td>
+      <td class="numero">${destaque ? '<b>' : ''}${formatarBytes(c.bytes)}${destaque ? '</b>' : ''}</td>
+      <td class="numero">${formatarBytes(c.ja_guardados_bytes)}</td>
+      <td class="numero">${formatarBytes(Math.max(0, c.bytes - c.ja_guardados_bytes))}</td>
     </tr>`;
 
+  // Só as faixas que têm título. As vazias existem na resposta (são a referência), mas numa
+  // tabela seriam ruído.
+  const faixas = e.faixas.filter(f => f.titulos > 0);
+
   return `
-    <div class="secao-titulo">Quanto caberia guardar tudo</div>
+    <div class="secao-titulo">Quanto disco o acervo inteiro precisaria</div>
     <div class="cartao">
+      <p style="margin:0 0 6px">
+        <b>${num(e.filmes)}</b> filme(s) e <b>${num(e.episodios)}</b> episódio(s) —
+        cada um contado <b>uma vez só</b>.
+      </p>
       <p class="discreto" style="margin:0 0 12px">
-        Estimativa a partir do tamanho médio do que já foi baixado de cada fonte — e não de
-        uma média geral, porque cada fonte entrega em qualidade diferente.
-        <br>
-        Quanto mais arquivos baixados, mais firme o número. Abaixo de vinte, trate como ordem
-        de grandeza.
+        As fontes oferecem ${num(e.variantes)} cópias ao todo. As outras
+        ${num(repetidas)} são o mesmo título em outra pasta ou em outra fonte, e não precisam
+        ser baixadas: o sistema guarda uma cópia de cada.
+      </p>
+
+      <div class="tabela-wrap"><table>
+        <thead><tr>
+          <th>Guardando qual cópia</th><th class="numero">Total</th>
+          <th class="numero">Já guardado</th><th class="numero">Falta</th>
+        </tr></thead>
+        <tbody>
+          ${cenario('A da fonte que toca primeiro',
+            'É o que o sistema faz hoje: segue a prioridade das fontes.', e.prioridade, true)}
+          ${cenario('Sempre a mais leve',
+            'Quando o mesmo título existe em várias qualidades, a menor.', e.mais_leve)}
+          ${cenario('Sempre a melhor qualidade',
+            'A maior qualidade que alguma fonte declara ter.', e.melhor_qualidade)}
+        </tbody>
+      </table></div>
+
+      <p class="discreto" style="margin:14px 0 8px">
+        <b>De onde vem o peso de cada título.</b> Nenhum arquivo é aberto: a qualidade sai do
+        nome que a fonte dá ("1080p", "4K", "SD"), e o peso de cada qualidade sai do que já foi
+        baixado — quando há pelo menos dez arquivos daquela qualidade. Com menos, vale um
+        tamanho típico de IPTV, e a tabela avisa.
       </p>
       <div class="tabela-wrap"><table>
         <thead><tr>
-          <th>Fonte</th><th class="numero">Títulos</th>
-          <th class="numero">Média por título</th><th class="numero">Precisaria de</th>
+          <th>Tipo</th><th>Qualidade</th><th class="numero">Títulos</th>
+          <th class="numero">Peso por título</th><th>Origem do peso</th>
         </tr></thead>
-        <tbody>${e.fontes.map(linha).join('')}</tbody>
-        <tfoot><tr>
-          <td><b>Todas as fontes</b></td>
-          <td class="numero">${num(e.titulos)}</td>
-          <td></td>
-          <td class="numero"><b>${formatarBytes(e.total_bytes)}</b></td>
-        </tr></tfoot>
+        <tbody>${faixas.map(f => `
+          <tr>
+            <td>${f.tipo === 'episode' ? 'Episódio' : 'Filme'}</td>
+            <td>${esc(nomeDaFaixa[f.faixa] || f.faixa)}</td>
+            <td class="numero">${num(f.titulos)}</td>
+            <td class="numero">${formatarBytes(f.bytes)}</td>
+            <td>${f.medido
+              ? `medido em ${num(f.amostra)} arquivo(s)`
+              : `<span style="color:var(--alerta)">tamanho típico</span>
+                 <span class="dica">${f.amostra ? `só ${num(f.amostra)} baixado(s)` : 'nada baixado ainda'}</span>`}</td>
+          </tr>`).join('')}
+        </tbody>
       </table></div>
     </div>`;
 }
@@ -5333,8 +5373,8 @@ function cartaoDeClassificacao(c, tipo) {
         <h2>Organizar por gênero, automaticamente</h2>
         <p class="discreto" style="margin:0">
           Precisa de uma chave do <b>TMDB</b>, que é gratuita: crie em
-          <span class="mono">themoviedb.org</span> e coloque em
-          <span class="mono">TMDB_API_KEY</span> no arquivo de ambiente do serviço.
+          <span class="mono">themoviedb.org</span> e cole em
+          <a href="#configuracoes">Configurações</a>.
           <br>
           Com ela, o sistema consulta o gênero de cada título e cria as pastas sozinho —
           resolvendo de uma vez a pasta única com milhares de filmes dentro.

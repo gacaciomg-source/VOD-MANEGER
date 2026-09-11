@@ -577,18 +577,20 @@ func TestConcluirRecusaCopiaImplausivel(t *testing.T) {
 
 // TestEstimarArmazenamentoExecuta roda a consulta da estimativa contra o Postgres.
 //
-// Ela junta arquivos_guardados, source_variants e sources, e usa CTEs — o tipo de consulta
-// que compila em Go e o Postgres recusa. É a mesma razão dos outros testes deste arquivo: só
-// executar prova.
+// Ela junta arquivos_guardados, source_variants e sources, e usa CTEs e janelas — o tipo de
+// consulta que compila em Go e o Postgres recusa. É a mesma razão dos outros testes deste
+// arquivo: só executar prova. E com o banco VAZIO, que é como todo mundo começa.
 func TestEstimarArmazenamentoExecuta(t *testing.T) {
 	env := newTestEnv(t)
 
-	fontes, err := env.Store.EstimarArmazenamento(context.Background())
+	est, err := env.Store.EstimarAcervo(context.Background())
 	if err != nil {
-		t.Fatalf("EstimarArmazenamento: %v", err)
+		t.Fatalf("EstimarAcervo: %v", err)
 	}
-	if fontes == nil {
-		t.Fatal("a estimativa precisa ser uma lista vazia, e nunca nula: a tela itera sobre ela")
+	// As faixas vêm mesmo sem catálogo: a tela mostra a tabela de pesos de referência, e
+	// itera sobre ela.
+	if est == nil || len(est.Faixas) == 0 {
+		t.Fatal("a estimativa de um banco vazio precisa trazer as faixas de referência")
 	}
 }
 
