@@ -472,6 +472,105 @@ function tabelaRuns(runs) {
 // Tela: Fontes
 // ---------------------------------------------------------------------------
 
+/**
+ * Trocar um domínio antigo pelo novo em todas as fontes e links, de uma vez.
+ *
+ * Fonte de IPTV muda de domínio sem avisar. Numa M3U, cada um dos milhares de links guarda o
+ * domínio dentro dele — e enquanto ninguém troca, a fonte fica morta em silêncio e o failover
+ * cai na próxima da lista. Quem olha vê a SEGUNDA fonte falhando e procura o defeito no lugar
+ * errado.
+ *
+ * A prévia é obrigatória, e não um "tem certeza?": ela diz QUAIS fontes e QUANTOS links vão
+ * mudar. Um domínio digitado errado aparece como "0 links" antes de estragar alguma coisa.
+ */
+function formularioTrocarDominio() {
+  abrirModal('Trocar domínio', `
+    <p class="discreto" style="margin-top:0">
+      Quando uma fonte muda de endereço, troque aqui o domínio antigo pelo novo. Vale para o
+      endereço das fontes e para todos os links do catálogo, de uma vez — sem recadastrar nada
+      e sem perder o que você já organizou.
+    </p>
+    <label>Domínio antigo
+      <input id="dom-de" placeholder="ex.: antigo.com ou antigo.com:8080" autocomplete="off">
+    </label>
+    <label>Domínio novo
+      <input id="dom-para" placeholder="ex.: novo.com ou novo.com:8080" autocomplete="off">
+    </label>
+    <p class="dica">
+      Pode colar com <span class="mono">http://</span> e caminho: só o domínio é usado. Só troca
+      o domínio <b>exato</b> — <span class="mono">antigo.com</span> não mexe em
+      <span class="mono">antigo.com.br</span>. A porta, se você não escrever, é mantida como
+      está em cada link.
+    </p>
+    <div id="dom-previa"></div>
+    <div class="erro" id="dom-erro" hidden></div>
+    <div class="grupo-botoes">
+      <button class="btn" data-acao="cancelar">Cancelar</button>
+      <button class="btn" data-acao="conferir">Conferir</button>
+      <button class="btn btn-primario" data-acao="trocar" disabled>Trocar</button>
+    </div>
+  `, corpo => {
+    const erro = corpo.querySelector('#dom-erro');
+    const previa = corpo.querySelector('#dom-previa');
+    const trocar = corpo.querySelector('[data-acao=trocar]');
+    const campos = () => ({
+      de: corpo.querySelector('#dom-de').value,
+      para: corpo.querySelector('#dom-para').value,
+    });
+
+    // Mudou um campo, a prévia deixa de valer: confirmar exige conferir de novo o que
+    // está escrito AGORA, e não o que estava escrito quando se clicou em Conferir.
+    corpo.querySelectorAll('input').forEach(i => i.oninput = () => {
+      trocar.disabled = true;
+      previa.innerHTML = '';
+    });
+
+    corpo.querySelector('[data-acao=cancelar]').onclick = fecharModal;
+
+    corpo.querySelector('[data-acao=conferir]').onclick = async () => {
+      erro.hidden = true;
+      trocar.disabled = true;
+      try {
+        const r = await api('/sources/trocar-dominio', {
+          method: 'POST', corpo: { ...campos(), simular: true },
+        });
+        const nada = r.links === 0 && r.fontes === 0;
+        previa.innerHTML = `
+          <div class="cartao" style="margin:12px 0">
+            <b class="mono">${esc(r.de)}</b> → <b class="mono">${esc(r.para)}</b>
+            <p style="margin:8px 0 0">
+              ${nada
+                ? 'Nenhuma fonte nem link usa esse domínio. Confira se ele está escrito como aparece no endereço da fonte.'
+                : `Vai mudar <b>${num(r.links)}</b> link(s)
+                   ${r.fontes ? `e o endereço de <b>${r.nomes_das_fontes.map(esc).join(', ')}</b>` : ''}.`}
+            </p>
+          </div>`;
+        trocar.disabled = nada;
+      } catch (err) {
+        erro.textContent = err.message;
+        erro.hidden = false;
+      }
+    };
+
+    trocar.onclick = async () => {
+      erro.hidden = true;
+      trocar.disabled = true;
+      try {
+        const r = await api('/sources/trocar-dominio', {
+          method: 'POST', corpo: { ...campos(), simular: false },
+        });
+        fecharModal();
+        aviso(`Domínio trocado: ${num(r.links)} link(s) atualizado(s).`, 'ok');
+        navegar();
+      } catch (err) {
+        erro.textContent = err.message;
+        erro.hidden = false;
+        trocar.disabled = false;
+      }
+    };
+  });
+}
+
 async function verFontes() {
   const [{ sources }, { runs }] = await Promise.all([
     api('/sources'),
@@ -479,8 +578,11 @@ async function verFontes() {
   ]);
   const emAndamento = new Map(runs.filter(r => r.state === 'running').map(r => [r.source_id, r]));
 
-  $('#acoes-pagina').innerHTML = '<button class="btn btn-primario" id="nova-fonte">+ Nova fonte</button>';
+  $('#acoes-pagina').innerHTML = `
+    <button class="btn" id="trocar-dominio">Trocar domínio</button>
+    <button class="btn btn-primario" id="nova-fonte">+ Nova fonte</button>`;
   $('#nova-fonte').onclick = () => formularioFonte(null);
+  $('#trocar-dominio').onclick = formularioTrocarDominio;
 
   if (!sources.length) {
     $('#visao').innerHTML = `

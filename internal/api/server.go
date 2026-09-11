@@ -177,6 +177,7 @@ func (s *Server) routes() chi.Router {
 				r.Patch("/sources/{id}", s.handleUpdateSource)
 				r.Delete("/sources/{id}", s.handleDeleteSource)
 				r.Post("/sources/reorder", s.handleReorderSources)
+				r.Post("/sources/trocar-dominio", s.handleTrocarDominio)
 				r.Put("/sources/{id}/credentials", s.handleSetSourceCredential)
 				r.Delete("/sources/{id}/credentials", s.handleDeleteSourceCredential)
 				r.Post("/sources/{id}/sync", s.handleSyncSource)
