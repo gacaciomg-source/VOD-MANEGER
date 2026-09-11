@@ -167,6 +167,10 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 
 	var (
 		ultimoErro error
+		// erros guarda UMA linha por origem tentada, na ordem. Mostrar só o último escondia a
+		// pergunta que importa: a fonte principal chegou a ser tentada, ou o episódio nem a
+		// conhecia?
+		erros      []string
 		tentativas int
 		usada      *store.PlayableVariant
 		resp       *http.Response
@@ -211,6 +215,7 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		origem, cancelarOrigem, err := p.abrirOrigem(r, v)
 		if err != nil {
 			ultimoErro = err
+			erros = append(erros, err.Error())
 			p.log.Warn("origem falhou, tentando a próxima",
 				"variant_id", v.ID, "fonte", v.SourceName, "erro", err)
 			continue
@@ -234,6 +239,7 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 				ultimoErro = fmt.Errorf(
 					"a fonte %s devolveu %d bytes, curto demais para um vídeo — provável aviso de manutenção",
 					v.SourceName, total)
+				erros = append(erros, ultimoErro.Error())
 				p.log.Warn("origem devolveu vídeo curto demais; provável manutenção",
 					"variant_id", v.ID, "fonte", v.SourceName,
 					"bytes_anunciados", total, "minimo", p.tamanhoMinimo)
@@ -257,7 +263,13 @@ func (p *Proxy) ServeContent(w http.ResponseWriter, r *http.Request, ped pedido)
 		// erro apareceria no painel como se nunca tivesse sido usada.
 		p.contabilidade.Registrar(ped.credID, 0)
 		msg := "nenhuma origem respondeu"
-		if ultimoErro != nil {
+		if len(erros) > 0 {
+			msg = fmt.Sprintf("%d origem(ns) conhecida(s) para este conteúdo, todas falharam:\n",
+				len(ped.variantes))
+			for i, e := range erros {
+				msg += fmt.Sprintf("%d. %s\n", i+1, ingest.RedactString(e))
+			}
+		} else if ultimoErro != nil {
 			msg = ingest.RedactString(ultimoErro.Error())
 		}
 		http.Error(w, msg, http.StatusBadGateway)
