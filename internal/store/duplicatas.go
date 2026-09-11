@@ -4,6 +4,8 @@ import (
 	"context"
 	"sort"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Sugestões de conteúdo duplicado.
@@ -133,12 +135,15 @@ func (s *Store) UnirConteudos(ctx context.Context, destino, origem int64) (int64
 	}
 	defer tx.Rollback(ctx)
 
-	// Séries: as temporadas passam a pertencer ao destino. Episódios acompanham, porque
-	// pendem da temporada.
-	if _, err := tx.Exec(ctx,
-		`UPDATE seasons SET series_content_id = $1 WHERE series_content_id = $2`,
-		destino, origem); err != nil {
-		return 0, wrapErr("movendo temporadas", err)
+	// Séries: MESCLAR temporadas e episódios, e não só mudar as temporadas de dono.
+	//
+	// Isto era um UPDATE simples nas temporadas, e quebrava em quase toda série: temporada é
+	// única por (série, número), e duas fontes da mesma série têm, as duas, "Temporada 1". A
+	// união falhava na restrição e a série ficava partida em duas — cada episódio conhecendo
+	// uma fonte só. A prioridade das fontes deixava de valer, porque não havia entre quem
+	// escolher: a principal podia estar no ar que o episódio nem sabia que ela o tinha.
+	if err := mesclarTemporadas(ctx, tx, destino, origem); err != nil {
+		return 0, err
 	}
 
 	// Filmes: as variantes apontam direto para o conteúdo.
@@ -166,6 +171,98 @@ func (s *Store) UnirConteudos(ctx context.Context, destino, origem int64) (int64
 		return 0, wrapErr("confirmando a união", err)
 	}
 	return movidas, nil
+}
+
+// mesclarTemporadas junta as temporadas de `origem` nas de `destino`, na mesma transação.
+//
+// Em três casos, do mais comum ao mais raro:
+//
+//   - Temporada que só a origem tem: muda de dono inteira, com os episódios.
+//   - Episódio que só a origem tem, numa temporada que as duas têm: muda de temporada.
+//   - Episódio que as duas têm: é o MESMO episódio vindo de duas fontes. As variantes da
+//     origem passam para o episódio do destino — é exatamente isso que dá ao episódio a
+//     segunda fonte para o failover —, e o episódio da origem deixa de existir.
+//
+// No terceiro caso, o que o administrador escolheu à mão no destino vence; vazio lá, vale o
+// da origem. E a audiência se soma, em vez de uma metade sumir.
+func mesclarTemporadas(ctx context.Context, tx pgx.Tx, destino, origem int64) error {
+	// 1. Episódios repetidos: as variantes vão para o episódio que fica.
+	if _, err := tx.Exec(ctx, `
+		WITH pares AS (
+			SELECT eo.id AS de, ed.id AS para
+			FROM seasons so
+			JOIN seasons sd  ON sd.series_content_id = $1 AND sd.season_number = so.season_number
+			JOIN episodes eo ON eo.season_id = so.id
+			JOIN episodes ed ON ed.season_id = sd.id AND ed.episode_number = eo.episode_number
+			WHERE so.series_content_id = $2
+		)
+		UPDATE source_variants v SET target_id = p.para, updated_at = now()
+		FROM pares p
+		WHERE v.target_kind = 'episode' AND v.target_id = p.de`, destino, origem); err != nil {
+		return wrapErr("juntando as fontes dos episódios repetidos", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		WITH pares AS (
+			SELECT eo.id AS de, ed.id AS para
+			FROM seasons so
+			JOIN seasons sd  ON sd.series_content_id = $1 AND sd.season_number = so.season_number
+			JOIN episodes eo ON eo.season_id = so.id
+			JOIN episodes ed ON ed.season_id = sd.id AND ed.episode_number = eo.episode_number
+			WHERE so.series_content_id = $2
+		),
+		audiencia AS (
+			UPDATE streams s SET episode_id = p.para FROM pares p WHERE s.episode_id = p.de
+		)
+		UPDATE episodes ed SET
+			primary_variant_id   = coalesce(ed.primary_variant_id,   eo.primary_variant_id),
+			secondary_variant_id = coalesce(ed.secondary_variant_id, eo.secondary_variant_id),
+			tertiary_variant_id  = coalesce(ed.tertiary_variant_id,  eo.tertiary_variant_id),
+			title        = CASE WHEN ed.title = ''      THEN eo.title      ELSE ed.title END,
+			plot         = CASE WHEN ed.plot = ''       THEN eo.plot       ELSE ed.plot END,
+			poster_url   = CASE WHEN ed.poster_url = '' THEN eo.poster_url ELSE ed.poster_url END,
+			access_count = ed.access_count + eo.access_count,
+			last_access_at = greatest(ed.last_access_at, eo.last_access_at),
+			updated_at   = now()
+		FROM pares p JOIN episodes eo ON eo.id = p.de
+		WHERE ed.id = p.para`, destino, origem); err != nil {
+		return wrapErr("juntando os episódios repetidos", err)
+	}
+	// O episódio da origem, já sem variantes nem audiência, sai.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM episodes eo
+		USING seasons so, seasons sd, episodes ed
+		WHERE eo.season_id = so.id AND so.series_content_id = $2
+		  AND sd.series_content_id = $1 AND sd.season_number = so.season_number
+		  AND ed.season_id = sd.id AND ed.episode_number = eo.episode_number`,
+		destino, origem); err != nil {
+		return wrapErr("removendo os episódios repetidos", err)
+	}
+
+	// 2. Episódios que só a origem tem, em temporadas que as duas têm: mudam de temporada.
+	if _, err := tx.Exec(ctx, `
+		UPDATE episodes eo SET season_id = sd.id, updated_at = now()
+		FROM seasons so, seasons sd
+		WHERE eo.season_id = so.id AND so.series_content_id = $2
+		  AND sd.series_content_id = $1 AND sd.season_number = so.season_number`,
+		destino, origem); err != nil {
+		return wrapErr("movendo episódios", err)
+	}
+	// Essas temporadas da origem ficaram vazias.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM seasons so USING seasons sd
+		WHERE so.series_content_id = $2
+		  AND sd.series_content_id = $1 AND sd.season_number = so.season_number`,
+		destino, origem); err != nil {
+		return wrapErr("removendo temporadas vazias", err)
+	}
+
+	// 3. O que sobrou são temporadas que só a origem tem: mudam de dono inteiras.
+	if _, err := tx.Exec(ctx,
+		`UPDATE seasons SET series_content_id = $1 WHERE series_content_id = $2`,
+		destino, origem); err != nil {
+		return wrapErr("movendo temporadas", err)
+	}
+	return nil
 }
 
 func ordenar(a, b int64) (int64, int64) {

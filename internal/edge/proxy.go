@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"vodmanager/internal/auth"
@@ -476,7 +477,43 @@ func (p *Proxy) abrirOrigem(r *http.Request, v *store.PlayableVariant) (*http.Re
 		cancelar()
 		return nil, nil, fmt.Errorf("a fonte %s respondeu %s", v.SourceName, resp.Status)
 	}
+	// "200 OK" com uma página de erro no lugar do vídeo.
+	//
+	// É como servidor de IPTV costuma dizer "invalid stream", "conta vencida" ou "conexões
+	// esgotadas": sucesso no status, texto no corpo. Sem tamanho anunciado, nem a detecção de
+	// manutenção pega — e o proxy entregava o texto ao player, que acusava stream inválido,
+	// enquanto a próxima fonte da lista, funcionando, nunca era tentada.
+	//
+	// Texto nunca é vídeo, então isto é falha da origem como qualquer outra: vai para a
+	// próxima. Diferente do aviso de manutenção, não vale servir "na falta de coisa melhor" —
+	// o player não toca uma página.
+	//
+	// A exceção é HLS: a lista .m3u8 É texto, e há servidor que a entrega como text/plain.
+	tipo := resp.Header.Get("Content-Type")
+	if !strings.EqualFold(v.ContainerExt, "m3u8") && respostaDeTextoNoLugarDoVideo(tipo) {
+		resp.Body.Close()
+		cancelar()
+		return nil, nil, fmt.Errorf("a fonte %s respondeu texto (%s) no lugar do vídeo — "+
+			"costuma ser link inválido, conta vencida ou conexões esgotadas", v.SourceName, tipo)
+	}
 	return resp, cancelar, nil
+}
+
+// respostaDeTextoNoLugarDoVideo reconhece os tipos que servidor de vídeo usa para erro.
+//
+// Lista curta e explícita. "application/octet-stream" e tipo vazio ficam de fora de
+// propósito: é assim que muita fonte entrega vídeo de verdade, e recusá-los derrubaria
+// conteúdo bom.
+func respostaDeTextoNoLugarDoVideo(contentType string) bool {
+	tipo := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(tipo, ';'); i >= 0 {
+		tipo = strings.TrimSpace(tipo[:i])
+	}
+	switch tipo {
+	case "text/html", "text/plain", "application/json", "text/xml", "application/xml":
+		return true
+	}
+	return false
 }
 
 // cabecalhosRepassados são os que o player precisa e que não vazam nada da origem.
